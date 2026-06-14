@@ -43,3 +43,11 @@
 .flashcards-llm-floating-bar button:hover {
   background: var(--interactive-hover);
 }
+
+.flashcards-llm-key-point {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--color-yellow);
+}

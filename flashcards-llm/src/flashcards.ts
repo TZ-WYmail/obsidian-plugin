@@ -14,6 +14,40 @@ export interface FlashcardsGenerationResult {
   raw: string;
 }
 
+export function normalizeSourceText(text: string): string {
+  return text
+    .replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "")
+    .replace(/<\/u>/gi, "")
+    .replace(/<!--.*?-->/gs, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function cleanSourceTextForCard(text: string): string {
+  return text
+    .replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "")
+    .replace(/<\/u>/gi, "")
+    .replace(/<!--.*?-->/gs, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function buildSourceHash(text: string): string {
+  const normalized = normalizeSourceText(text);
+  let h1 = 0xdeadbeef ^ normalized.length;
+  let h2 = 0x41c6ce57 ^ normalized.length;
+
+  for (let i = 0; i < normalized.length; i += 1) {
+    const ch = normalized.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h2 >>> 0).toString(36)}${(h1 >>> 0).toString(36)}`;
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
@@ -81,6 +115,23 @@ function buildModeInstructions(mode: CardMode): string[] {
   ];
 }
 
+function buildTwoSidedKnowledgePrompt(additionalPrompt: string): string {
+  const promptParts = [
+    "你是 Obsidian 到 Anki 的制卡助手。",
+    "用户会提供一段已经划重点的笔记原文。",
+    "请只为这段原文生成一张双面知识点卡片的正面提示。",
+    "正面提示必须是一个简洁的问题、概念提示或回忆线索，用中文输出。",
+    "不要在正面里直接泄露答案，不要复述整段原文。",
+    "不要输出 `Q:`、`A:`、标题、解释、列表、代码块或 Obsidian_to_Anki 结构。",
+    "只输出正面提示文本本身。"
+  ];
+  let prompt = promptParts.join("\n");
+  if (additionalPrompt.trim()) {
+    prompt += `\n额外要求：\n${additionalPrompt.trim()}`;
+  }
+  return prompt;
+}
+
 function buildPrompt(mode: CardMode, count: number, systemPrompt: string, additionalPrompt: string): string {
   if (systemPrompt.trim()) {
     return systemPrompt.trim();
@@ -120,10 +171,7 @@ function parseCards(raw: string): string[] {
 }
 
 function buildFallbackCard(source: string, mode: CardMode): string {
-  const compactSource = source
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 500);
+  const compactSource = normalizeSourceText(source).slice(0, 500);
 
   if (!compactSource) {
     throw new Error("选中文本或高亮内容为空，无法生成卡片");
@@ -143,6 +191,20 @@ function buildFallbackCard(source: string, mode: CardMode): string {
     "Basic",
     "Q: 这段内容的核心知识点是什么？",
     `A: ${compactSource}`,
+    "END"
+  ].join("\n");
+}
+
+function buildTwoSidedKnowledgeFallback(source: string): string {
+  const compactSource = normalizeSourceText(source).slice(0, 500);
+  if (!compactSource) {
+    throw new Error("重点原文为空，无法生成双面知识点卡片");
+  }
+  return [
+    "START",
+    "Basic",
+    "Q: 这段重点原文说明了什么核心知识点？",
+    `A: ${formatOriginalTextForAnswer(compactSource)}`,
     "END"
   ].join("\n");
 }
@@ -214,6 +276,23 @@ function extractResponseText(data: unknown): string {
   }
 
   return "";
+}
+
+function cleanupSingleLine(raw: string): string {
+  return stripOuterCodeFence(raw)
+    .split("\n")
+    .map((line) => line.replace(/^[-*]\s+/, "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/^Q[:：]\s*/i, "")
+    .replace(/^问题[:：]\s*/i, "")
+    .trim();
+}
+
+export function formatOriginalTextForAnswer(source: string): string {
+  return cleanSourceTextForCard(source)
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n/g, "<br>");
 }
 
 async function readJsonResponse(response: Response): Promise<string> {
@@ -413,4 +492,35 @@ export async function generateFlashcardsWithProgress(
   const parsed = parseCards(raw);
   const cards = parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
   return { cards, raw };
+}
+
+export async function generateTwoSidedKnowledgeCard(
+  text: string,
+  settings: FlashcardsSettings,
+  progress: FlashcardsGenerationProgress = {}
+): Promise<string> {
+  const cleanedText = cleanSourceTextForCard(stripExistingCards(text.replace(/<!--.*?-->/gs, "")));
+  const prompt = buildTwoSidedKnowledgePrompt(settings.additionalPrompt || "");
+  const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
+  const headers = buildHeaders(settings);
+  const response = await postJson(
+    url,
+    headers,
+    buildRequestBody(settings, prompt, normalizeSourceText(cleanedText), "knowledge", false),
+    progress.signal
+  );
+  const raw = await readJsonResponse(response);
+  const front = cleanupSingleLine(raw);
+
+  if (!front) {
+    return buildTwoSidedKnowledgeFallback(cleanedText);
+  }
+
+  return [
+    "START",
+    "Basic",
+    `Q: ${front}`,
+    `A: ${formatOriginalTextForAnswer(cleanedText)}`,
+    "END"
+  ].join("\n");
 }

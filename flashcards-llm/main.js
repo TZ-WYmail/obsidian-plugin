@@ -30,6 +30,25 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian3 = require("obsidian");
 
 // src/flashcards.ts
+function normalizeSourceText(text) {
+  return text.replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "").replace(/<\/u>/gi, "").replace(/<!--.*?-->/gs, "").replace(/\s+/g, " ").trim();
+}
+function cleanSourceTextForCard(text) {
+  return text.replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "").replace(/<\/u>/gi, "").replace(/<!--.*?-->/gs, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+function buildSourceHash(text) {
+  const normalized = normalizeSourceText(text);
+  let h1 = 3735928559 ^ normalized.length;
+  let h2 = 1103547991 ^ normalized.length;
+  for (let i = 0; i < normalized.length; i += 1) {
+    const ch = normalized.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507) ^ Math.imul(h2 ^ h2 >>> 13, 3266489909);
+  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507) ^ Math.imul(h1 ^ h1 >>> 13, 3266489909);
+  return `${(h2 >>> 0).toString(36)}${(h1 >>> 0).toString(36)}`;
+}
 function normalizeBaseUrl(baseUrl) {
   return baseUrl.replace(/\/+$/, "");
 }
@@ -92,6 +111,24 @@ function buildModeInstructions(mode) {
     "\u5373\u4F7F\u6750\u6599\u5F88\u77ED\uFF0C\u4E5F\u5FC5\u987B\u81F3\u5C11\u751F\u6210 1 \u5F20\u5361\u7247\uFF0C\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u5185\u5BB9\u3002"
   ];
 }
+function buildTwoSidedKnowledgePrompt(additionalPrompt) {
+  const promptParts = [
+    "\u4F60\u662F Obsidian \u5230 Anki \u7684\u5236\u5361\u52A9\u624B\u3002",
+    "\u7528\u6237\u4F1A\u63D0\u4F9B\u4E00\u6BB5\u5DF2\u7ECF\u5212\u91CD\u70B9\u7684\u7B14\u8BB0\u539F\u6587\u3002",
+    "\u8BF7\u53EA\u4E3A\u8FD9\u6BB5\u539F\u6587\u751F\u6210\u4E00\u5F20\u53CC\u9762\u77E5\u8BC6\u70B9\u5361\u7247\u7684\u6B63\u9762\u63D0\u793A\u3002",
+    "\u6B63\u9762\u63D0\u793A\u5FC5\u987B\u662F\u4E00\u4E2A\u7B80\u6D01\u7684\u95EE\u9898\u3001\u6982\u5FF5\u63D0\u793A\u6216\u56DE\u5FC6\u7EBF\u7D22\uFF0C\u7528\u4E2D\u6587\u8F93\u51FA\u3002",
+    "\u4E0D\u8981\u5728\u6B63\u9762\u91CC\u76F4\u63A5\u6CC4\u9732\u7B54\u6848\uFF0C\u4E0D\u8981\u590D\u8FF0\u6574\u6BB5\u539F\u6587\u3002",
+    "\u4E0D\u8981\u8F93\u51FA `Q:`\u3001`A:`\u3001\u6807\u9898\u3001\u89E3\u91CA\u3001\u5217\u8868\u3001\u4EE3\u7801\u5757\u6216 Obsidian_to_Anki \u7ED3\u6784\u3002",
+    "\u53EA\u8F93\u51FA\u6B63\u9762\u63D0\u793A\u6587\u672C\u672C\u8EAB\u3002"
+  ];
+  let prompt = promptParts.join("\n");
+  if (additionalPrompt.trim()) {
+    prompt += `
+\u989D\u5916\u8981\u6C42\uFF1A
+${additionalPrompt.trim()}`;
+  }
+  return prompt;
+}
 function buildPrompt(mode, count, systemPrompt, additionalPrompt) {
   if (systemPrompt.trim()) {
     return systemPrompt.trim();
@@ -123,7 +160,7 @@ function parseCards(raw) {
   return parts.map((part) => part.trim()).map(stripOuterCodeFence).filter((card) => card.length > 0);
 }
 function buildFallbackCard(source, mode) {
-  const compactSource = source.replace(/\s+/g, " ").trim().slice(0, 500);
+  const compactSource = normalizeSourceText(source).slice(0, 500);
   if (!compactSource) {
     throw new Error("\u9009\u4E2D\u6587\u672C\u6216\u9AD8\u4EAE\u5185\u5BB9\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u751F\u6210\u5361\u7247");
   }
@@ -140,6 +177,19 @@ function buildFallbackCard(source, mode) {
     "Basic",
     "Q: \u8FD9\u6BB5\u5185\u5BB9\u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F",
     `A: ${compactSource}`,
+    "END"
+  ].join("\n");
+}
+function buildTwoSidedKnowledgeFallback(source) {
+  const compactSource = normalizeSourceText(source).slice(0, 500);
+  if (!compactSource) {
+    throw new Error("\u91CD\u70B9\u539F\u6587\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u751F\u6210\u53CC\u9762\u77E5\u8BC6\u70B9\u5361\u7247");
+  }
+  return [
+    "START",
+    "Basic",
+    "Q: \u8FD9\u6BB5\u91CD\u70B9\u539F\u6587\u8BF4\u660E\u4E86\u4EC0\u4E48\u6838\u5FC3\u77E5\u8BC6\u70B9\uFF1F",
+    `A: ${formatOriginalTextForAnswer(compactSource)}`,
     "END"
   ].join("\n");
 }
@@ -195,6 +245,12 @@ function extractResponseText(data) {
     return output.map((item) => contentToText(item == null ? void 0 : item.content)).join("");
   }
   return "";
+}
+function cleanupSingleLine(raw) {
+  return stripOuterCodeFence(raw).split("\n").map((line) => line.replace(/^[-*]\s+/, "").trim()).filter(Boolean).join(" ").replace(/^Q[:：]\s*/i, "").replace(/^问题[:：]\s*/i, "").trim();
+}
+function formatOriginalTextForAnswer(source) {
+  return cleanSourceTextForCard(source).replace(/\n{3,}/g, "\n\n").replace(/\n/g, "<br>");
 }
 async function readJsonResponse(response) {
   const data = await response.json();
@@ -356,6 +412,30 @@ async function generateFlashcardsWithProgress(text, settings, mode, progress = {
   const parsed = parseCards(raw);
   const cards = parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
   return { cards, raw };
+}
+async function generateTwoSidedKnowledgeCard(text, settings, progress = {}) {
+  const cleanedText = cleanSourceTextForCard(stripExistingCards(text.replace(/<!--.*?-->/gs, "")));
+  const prompt = buildTwoSidedKnowledgePrompt(settings.additionalPrompt || "");
+  const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
+  const headers = buildHeaders(settings);
+  const response = await postJson(
+    url,
+    headers,
+    buildRequestBody(settings, prompt, normalizeSourceText(cleanedText), "knowledge", false),
+    progress.signal
+  );
+  const raw = await readJsonResponse(response);
+  const front = cleanupSingleLine(raw);
+  if (!front) {
+    return buildTwoSidedKnowledgeFallback(cleanedText);
+  }
+  return [
+    "START",
+    "Basic",
+    `Q: ${front}`,
+    `A: ${formatOriginalTextForAnswer(cleanedText)}`,
+    "END"
+  ].join("\n");
 }
 
 // src/components.ts
@@ -721,6 +801,27 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
         this.openGenerationFlow(editor, view, "knowledge");
       }
     });
+    this.addCommand({
+      id: "mark-selection-as-key-point",
+      name: "\u628A\u9009\u4E2D\u6587\u672C\u5212\u4E3A\u91CD\u70B9",
+      editorCallback: (editor) => {
+        this.markSelectionAsKeyPoint(editor);
+      }
+    });
+    this.addCommand({
+      id: "batch-generate-key-point-qa-flashcards",
+      name: "\u6279\u91CF\u751F\u6210\u91CD\u70B9\u95EE\u7B54\u5361\u7247",
+      editorCallback: async (editor, view) => {
+        await this.batchGenerateKeyPointCards(editor, view, "qa");
+      }
+    });
+    this.addCommand({
+      id: "batch-generate-key-point-knowledge-flashcards",
+      name: "\u6279\u91CF\u751F\u6210\u91CD\u70B9\u77E5\u8BC6\u70B9\u5361\u7247\uFF08\u80CC\u9762\u539F\u8BDD\uFF09",
+      editorCallback: async (editor, view) => {
+        await this.batchGenerateKeyPointCards(editor, view, "knowledge");
+      }
+    });
     this.addSettingTab(new FlashcardsSettingsTab(this.app, this));
     this.registerDomEvent(document, "selectionchange", () => {
       this.handleSelectionChange();
@@ -786,8 +887,14 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
       knowledgeButton.textContent = "\u77E5\u8BC6\u70B9\u5361";
       knowledgeButton.onmousedown = (evt) => evt.preventDefault();
       knowledgeButton.onclick = () => this.quickGenerate("knowledge");
+      const markButton = document.createElement("button");
+      markButton.type = "button";
+      markButton.textContent = "\u5212\u91CD\u70B9";
+      markButton.onmousedown = (evt) => evt.preventDefault();
+      markButton.onclick = () => this.quickMarkKeyPoint();
       bar.appendChild(qaButton);
       bar.appendChild(knowledgeButton);
+      bar.appendChild(markButton);
       document.body.appendChild(bar);
       this.floatingBarEl = bar;
     }
@@ -812,20 +919,59 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
     this.hideFloatingBar();
     await this.generateAndPreview(editor, view, this.settings, mode, this.getSourceText(editor));
   }
+  quickMarkKeyPoint() {
+    var _a;
+    const editor = (_a = this.activeEditor) != null ? _a : this.getActiveMarkdownEditor();
+    if (!editor) {
+      new import_obsidian3.Notice("\u6CA1\u6709\u53EF\u7528\u7684 Markdown \u7F16\u8F91\u5668");
+      return;
+    }
+    this.markSelectionAsKeyPoint(editor);
+    this.hideFloatingBar();
+  }
   openGenerationFlow(editor, view, mode) {
     new GenerateModeModal(this.app, this, async ({ configuration, mode: selectedMode }) => {
       const sourceText = this.getSourceText(editor);
       await this.generateAndPreview(editor, view, configuration, selectedMode, sourceText);
     }, mode).open();
   }
-  async generateAndPreview(editor, view, configuration, mode, sourceText) {
+  markSelectionAsKeyPoint(editor) {
+    var _a, _b, _c;
+    const selection = editor.getSelection();
+    if (!selection.trim()) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u9009\u4E2D\u9700\u8981\u5212\u91CD\u70B9\u7684\u6587\u672C");
+      return;
+    }
+    const match = selection.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    const leading = (_a = match == null ? void 0 : match[1]) != null ? _a : "";
+    const body = (_b = match == null ? void 0 : match[2]) != null ? _b : selection;
+    const trailing = (_c = match == null ? void 0 : match[3]) != null ? _c : "";
+    if (!body.trim()) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u9009\u4E2D\u9700\u8981\u5212\u91CD\u70B9\u7684\u6587\u672C");
+      return;
+    }
+    if (/data-flashcards-llm-key=["']/.test(body)) {
+      new import_obsidian3.Notice("\u8FD9\u6BB5\u5185\u5BB9\u5DF2\u7ECF\u662F\u91CD\u70B9");
+      return;
+    }
+    if (/<\/u>/i.test(body)) {
+      new import_obsidian3.Notice("\u9009\u533A\u5305\u542B\u5DF2\u6709\u4E0B\u5212\u7EBF\u6807\u8BB0\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u672A\u88AB\u5305\u88F9\u7684\u539F\u6587");
+      return;
+    }
+    const sourceHash = buildSourceHash(body);
+    editor.replaceSelection(
+      `${leading}<u class="flashcards-llm-key-point" data-flashcards-llm-key="${sourceHash}">${body}</u>${trailing}`
+    );
+    new import_obsidian3.Notice("\u5DF2\u5212\u91CD\u70B9\uFF0C\u53EF\u4F7F\u7528\u6279\u91CF\u547D\u4EE4\u751F\u6210\u5361\u7247");
+  }
+  getEffectiveConfig(configuration) {
     if (!configuration.apiKey) {
       new import_obsidian3.Notice("\u8BF7\u5148\u5728\u63D2\u4EF6\u8BBE\u7F6E\u4E2D\u586B\u5199 API Key");
-      return;
+      return null;
     }
     if (!configuration.model) {
       new import_obsidian3.Notice("\u8BF7\u5148\u5728\u63D2\u4EF6\u8BBE\u7F6E\u4E2D\u586B\u5199\u6A21\u578B\u540D\u79F0");
-      return;
+      return null;
     }
     let flashcardsCount = Math.trunc(configuration.flashcardsCount);
     if (!Number.isFinite(flashcardsCount) || flashcardsCount <= 0) {
@@ -835,11 +981,100 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
     if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
       maxTokens = 300;
     }
-    const effectiveConfig = {
+    return {
       ...configuration,
       flashcardsCount,
       maxTokens
     };
+  }
+  extractMarkedKeyPoints(text) {
+    var _a, _b;
+    const keyPoints = [];
+    const markerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
+    let match;
+    let index = 0;
+    while ((match = markerPattern.exec(text)) !== null) {
+      const marker = match[0];
+      const markerId = (_b = (_a = marker.match(/data-flashcards-llm-key=["']([^"']+)["']/i)) == null ? void 0 : _a[1]) != null ? _b : "";
+      const cleanedText = cleanSourceTextForCard(match[1]);
+      if (!cleanedText) {
+        continue;
+      }
+      keyPoints.push({
+        markerId,
+        sourceHash: buildSourceHash(cleanedText),
+        text: cleanedText,
+        index
+      });
+      index += 1;
+    }
+    return keyPoints;
+  }
+  async batchGenerateKeyPointCards(editor, view, mode) {
+    const effectiveConfig = this.getEffectiveConfig({
+      ...this.settings,
+      flashcardsCount: 1,
+      streaming: false
+    });
+    if (!effectiveConfig) {
+      return;
+    }
+    const file = view.file;
+    if (!(file instanceof import_obsidian3.TFile)) {
+      new import_obsidian3.Notice("\u6CA1\u6709\u627E\u5230\u5F53\u524D\u7B14\u8BB0\u6587\u4EF6\uFF0C\u65E0\u6CD5\u6279\u91CF\u751F\u6210\u5361\u7247");
+      return;
+    }
+    const keyPoints = this.extractMarkedKeyPoints(editor.getValue());
+    if (!keyPoints.length) {
+      new import_obsidian3.Notice("\u5F53\u524D\u7B14\u8BB0\u6CA1\u6709\u627E\u5230\u7531\u672C\u63D2\u4EF6\u5212\u51FA\u7684\u91CD\u70B9");
+      return;
+    }
+    const folderPath = await this.ensureCardFolder(file);
+    const existingHashes = await this.getExistingSourceHashes(folderPath);
+    const seenInThisRun = /* @__PURE__ */ new Set();
+    const pending = keyPoints.filter((keyPoint) => {
+      if (seenInThisRun.has(keyPoint.sourceHash) || existingHashes.has(keyPoint.sourceHash)) {
+        return false;
+      }
+      seenInThisRun.add(keyPoint.sourceHash);
+      return true;
+    });
+    if (!pending.length) {
+      new import_obsidian3.Notice(`\u627E\u5230 ${keyPoints.length} \u6BB5\u91CD\u70B9\uFF0C\u4F46\u90FD\u5DF2\u751F\u6210\u8FC7\u5361\u7247\uFF0C\u672C\u6B21\u65E0\u9700\u5904\u7406`);
+      return;
+    }
+    new import_obsidian3.Notice(`\u627E\u5230 ${keyPoints.length} \u6BB5\u91CD\u70B9\uFF0C\u672C\u6B21\u5C06\u751F\u6210 ${pending.length} \u5F20\u65B0\u5361\u7247`);
+    let successCount = 0;
+    let failCount = 0;
+    for (const keyPoint of pending) {
+      try {
+        const card = await this.generateCardForKeyPoint(keyPoint, effectiveConfig, mode);
+        await this.saveKeyPointCardFile(file, card, mode, keyPoint);
+        successCount += 1;
+      } catch (error) {
+        failCount += 1;
+        console.error("\u6279\u91CF\u751F\u6210\u91CD\u70B9\u5361\u7247\u5931\u8D25\uFF1A", keyPoint, error);
+      }
+    }
+    if (successCount > 0) {
+      new import_obsidian3.Notice(`\u6279\u91CF\u751F\u6210\u5B8C\u6210\uFF1A\u65B0\u589E ${successCount} \u5F20\uFF0C\u5931\u8D25 ${failCount} \u5F20\uFF0C\u5DF2\u8DF3\u8FC7\u91CD\u590D\u91CD\u70B9`);
+      await this.trySyncToAnki();
+      return;
+    }
+    new import_obsidian3.Notice("\u6279\u91CF\u751F\u6210\u5931\u8D25\uFF0C\u8BF7\u67E5\u770B\u63D2\u4EF6\u63A7\u5236\u53F0\u8BE6\u60C5");
+  }
+  async generateCardForKeyPoint(keyPoint, configuration, mode) {
+    if (mode === "knowledge") {
+      return generateTwoSidedKnowledgeCard(keyPoint.text, configuration);
+    }
+    const result = await generateFlashcardsWithProgress(keyPoint.text, configuration, "qa");
+    return result.cards[0];
+  }
+  async generateAndPreview(editor, view, configuration, mode, sourceText) {
+    const effectiveConfig = this.getEffectiveConfig(configuration);
+    if (!effectiveConfig) {
+      return;
+    }
     const abortController = new AbortController();
     const preview = new PreviewModal(this.app, "", async (result) => {
       await this.saveCardsAndSync(view, result.text, mode);
@@ -893,18 +1128,7 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
     }
   }
   async saveCardsToSiblingFolder(file, text, mode) {
-    var _a, _b;
-    const parentPath = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
-    const folderName = `${file.basename}-card`;
-    const folderPath = (0, import_obsidian3.normalizePath)(parentPath ? `${parentPath}/${folderName}` : folderName);
-    const existingFolder = this.app.vault.getFolderByPath(folderPath);
-    const existingAbstractFile = this.app.vault.getAbstractFileByPath(folderPath);
-    if (!existingFolder) {
-      if (existingAbstractFile) {
-        throw new Error(`\u540C\u540D\u8DEF\u5F84\u5DF2\u5B58\u5728\u4F46\u4E0D\u662F\u6587\u4EF6\u5939\uFF1A${folderPath}`);
-      }
-      await this.app.vault.createFolder(folderPath);
-    }
+    const folderPath = await this.ensureCardFolder(file);
     const timestamp = this.formatTimestamp(new Date());
     const modeLabel = mode === "qa" ? "\u95EE\u7B54\u5361" : "\u77E5\u8BC6\u70B9\u5361";
     const cardPath = await this.getUniqueCardPath(folderPath, `${file.basename}-card-${timestamp}.md`);
@@ -920,6 +1144,75 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
       `# ${file.basename} - ${modeLabel}`,
       "",
       text.trim(),
+      ""
+    ].join("\n");
+    await this.app.vault.create(cardPath, content);
+    return cardPath;
+  }
+  getCardFolderPath(file) {
+    var _a, _b;
+    const parentPath = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
+    const folderName = `${file.basename}-card`;
+    return (0, import_obsidian3.normalizePath)(parentPath ? `${parentPath}/${folderName}` : folderName);
+  }
+  async ensureCardFolder(file) {
+    const folderPath = this.getCardFolderPath(file);
+    const existingFolder = this.app.vault.getFolderByPath(folderPath);
+    const existingAbstractFile = this.app.vault.getAbstractFileByPath(folderPath);
+    if (!existingFolder) {
+      if (existingAbstractFile) {
+        throw new Error(`\u540C\u540D\u8DEF\u5F84\u5DF2\u5B58\u5728\u4F46\u4E0D\u662F\u6587\u4EF6\u5939\uFF1A${folderPath}`);
+      }
+      await this.app.vault.createFolder(folderPath);
+    }
+    return folderPath;
+  }
+  async getExistingSourceHashes(folderPath) {
+    const hashes = /* @__PURE__ */ new Set();
+    const folder = this.app.vault.getFolderByPath(folderPath);
+    if (!folder) {
+      return hashes;
+    }
+    const files = this.getMarkdownFilesInFolder(folder);
+    for (const file of files) {
+      const content = await this.app.vault.cachedRead(file);
+      const matches = content.matchAll(/^source_hash:\s*["']?([^"'\s]+)["']?\s*$/gm);
+      for (const match of matches) {
+        hashes.add(match[1]);
+      }
+    }
+    return hashes;
+  }
+  getMarkdownFilesInFolder(folder) {
+    const files = [];
+    for (const child of folder.children) {
+      if (child instanceof import_obsidian3.TFile && child.extension === "md") {
+        files.push(child);
+      } else if (child instanceof import_obsidian3.TFolder) {
+        files.push(...this.getMarkdownFilesInFolder(child));
+      }
+    }
+    return files;
+  }
+  async saveKeyPointCardFile(file, card, mode, keyPoint) {
+    const folderPath = await this.ensureCardFolder(file);
+    const modeLabel = mode === "qa" ? "\u95EE\u7B54\u5361" : "\u77E5\u8BC6\u70B9\u5361";
+    const cardPath = await this.getUniqueCardPath(folderPath, `${file.basename}-key-${keyPoint.sourceHash}.md`);
+    const content = [
+      "---",
+      `source: "[[${file.basename}]]"`,
+      `source_path: "${file.path}"`,
+      `source_hash: "${keyPoint.sourceHash}"`,
+      `key_marker_id: "${keyPoint.markerId}"`,
+      `key_index: ${keyPoint.index}`,
+      `created: "${new Date().toISOString()}"`,
+      `mode: "batch-${mode}"`,
+      'generator: "\u95EA\u5361 LLM\uFF08\u81EA\u6539\u4E2D\u6587\u7248\uFF09"',
+      "---",
+      "",
+      `# ${file.basename} - \u91CD\u70B9${modeLabel}`,
+      "",
+      renderCards([card]),
       ""
     ].join("\n");
     await this.app.vault.create(cardPath, content);

@@ -1,7 +1,21 @@
-import { Editor, MarkdownView, Notice, normalizePath, Plugin, TFile } from "obsidian";
-import { CardMode, generateFlashcardsWithProgress, renderCards } from "./flashcards";
+import { Editor, MarkdownView, Notice, normalizePath, Plugin, TFile, TFolder } from "obsidian";
+import {
+  buildSourceHash,
+  CardMode,
+  cleanSourceTextForCard,
+  generateFlashcardsWithProgress,
+  generateTwoSidedKnowledgeCard,
+  renderCards
+} from "./flashcards";
 import { GenerateModeModal, PreviewModal } from "./components";
 import { FlashcardsSettings, FlashcardsSettingsTab } from "./settings";
+
+interface MarkedKeyPoint {
+  markerId: string;
+  sourceHash: string;
+  text: string;
+  index: number;
+}
 
 const DEFAULT_SETTINGS: FlashcardsSettings = {
   apiKey: "",
@@ -46,6 +60,30 @@ export default class FlashcardsLLMPlugin extends Plugin {
       name: "生成知识点卡片",
       editorCallback: (editor: Editor, view: MarkdownView) => {
         this.openGenerationFlow(editor, view, "knowledge");
+      }
+    });
+
+    this.addCommand({
+      id: "mark-selection-as-key-point",
+      name: "把选中文本划为重点",
+      editorCallback: (editor: Editor) => {
+        this.markSelectionAsKeyPoint(editor);
+      }
+    });
+
+    this.addCommand({
+      id: "batch-generate-key-point-qa-flashcards",
+      name: "批量生成重点问答卡片",
+      editorCallback: async (editor: Editor, view: MarkdownView) => {
+        await this.batchGenerateKeyPointCards(editor, view, "qa");
+      }
+    });
+
+    this.addCommand({
+      id: "batch-generate-key-point-knowledge-flashcards",
+      name: "批量生成重点知识点卡片（背面原话）",
+      editorCallback: async (editor: Editor, view: MarkdownView) => {
+        await this.batchGenerateKeyPointCards(editor, view, "knowledge");
       }
     });
 
@@ -124,8 +162,15 @@ export default class FlashcardsLLMPlugin extends Plugin {
       knowledgeButton.onmousedown = (evt) => evt.preventDefault();
       knowledgeButton.onclick = () => this.quickGenerate("knowledge");
 
+      const markButton = document.createElement("button");
+      markButton.type = "button";
+      markButton.textContent = "划重点";
+      markButton.onmousedown = (evt) => evt.preventDefault();
+      markButton.onclick = () => this.quickMarkKeyPoint();
+
       bar.appendChild(qaButton);
       bar.appendChild(knowledgeButton);
+      bar.appendChild(markButton);
       document.body.appendChild(bar);
       this.floatingBarEl = bar;
     }
@@ -152,6 +197,16 @@ export default class FlashcardsLLMPlugin extends Plugin {
     await this.generateAndPreview(editor, view, this.settings, mode, this.getSourceText(editor));
   }
 
+  private quickMarkKeyPoint() {
+    const editor = this.activeEditor ?? this.getActiveMarkdownEditor();
+    if (!editor) {
+      new Notice("没有可用的 Markdown 编辑器");
+      return;
+    }
+    this.markSelectionAsKeyPoint(editor);
+    this.hideFloatingBar();
+  }
+
   private openGenerationFlow(editor: Editor, view: MarkdownView, mode: CardMode) {
     new GenerateModeModal(this.app, this, async ({ configuration, mode: selectedMode }) => {
       const sourceText = this.getSourceText(editor);
@@ -159,20 +214,46 @@ export default class FlashcardsLLMPlugin extends Plugin {
     }, mode).open();
   }
 
-  private async generateAndPreview(
-    editor: Editor,
-    view: MarkdownView,
-    configuration: FlashcardsSettings,
-    mode: CardMode,
-    sourceText: string
-  ) {
+  private markSelectionAsKeyPoint(editor: Editor) {
+    const selection = editor.getSelection();
+    if (!selection.trim()) {
+      new Notice("请先选中需要划重点的文本");
+      return;
+    }
+
+    const match = selection.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    const leading = match?.[1] ?? "";
+    const body = match?.[2] ?? selection;
+    const trailing = match?.[3] ?? "";
+
+    if (!body.trim()) {
+      new Notice("请先选中需要划重点的文本");
+      return;
+    }
+    if (/data-flashcards-llm-key=["']/.test(body)) {
+      new Notice("这段内容已经是重点");
+      return;
+    }
+    if (/<\/u>/i.test(body)) {
+      new Notice("选区包含已有下划线标记，请重新选择未被包裹的原文");
+      return;
+    }
+
+    const sourceHash = buildSourceHash(body);
+    editor.replaceSelection(
+      `${leading}<u class="flashcards-llm-key-point" data-flashcards-llm-key="${sourceHash}">${body}</u>${trailing}`
+    );
+    new Notice("已划重点，可使用批量命令生成卡片");
+  }
+
+  private getEffectiveConfig(configuration: FlashcardsSettings): FlashcardsSettings | null {
     if (!configuration.apiKey) {
       new Notice("请先在插件设置中填写 API Key");
-      return;
+      return null;
     }
     if (!configuration.model) {
       new Notice("请先在插件设置中填写模型名称");
-      return;
+      return null;
     }
 
     let flashcardsCount = Math.trunc(configuration.flashcardsCount);
@@ -185,11 +266,124 @@ export default class FlashcardsLLMPlugin extends Plugin {
       maxTokens = 300;
     }
 
-    const effectiveConfig: FlashcardsSettings = {
+    return {
       ...configuration,
       flashcardsCount,
       maxTokens
     };
+  }
+
+  private extractMarkedKeyPoints(text: string): MarkedKeyPoint[] {
+    const keyPoints: MarkedKeyPoint[] = [];
+    const markerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
+    let match: RegExpExecArray | null;
+    let index = 0;
+
+    while ((match = markerPattern.exec(text)) !== null) {
+      const marker = match[0];
+      const markerId = marker.match(/data-flashcards-llm-key=["']([^"']+)["']/i)?.[1] ?? "";
+      const cleanedText = cleanSourceTextForCard(match[1]);
+      if (!cleanedText) {
+        continue;
+      }
+      keyPoints.push({
+        markerId,
+        sourceHash: buildSourceHash(cleanedText),
+        text: cleanedText,
+        index
+      });
+      index += 1;
+    }
+
+    return keyPoints;
+  }
+
+  private async batchGenerateKeyPointCards(editor: Editor, view: MarkdownView, mode: CardMode) {
+    const effectiveConfig = this.getEffectiveConfig({
+      ...this.settings,
+      flashcardsCount: 1,
+      streaming: false
+    });
+    if (!effectiveConfig) {
+      return;
+    }
+
+    const file = view.file;
+    if (!(file instanceof TFile)) {
+      new Notice("没有找到当前笔记文件，无法批量生成卡片");
+      return;
+    }
+
+    const keyPoints = this.extractMarkedKeyPoints(editor.getValue());
+    if (!keyPoints.length) {
+      new Notice("当前笔记没有找到由本插件划出的重点");
+      return;
+    }
+
+    const folderPath = await this.ensureCardFolder(file);
+    const existingHashes = await this.getExistingSourceHashes(folderPath);
+    const seenInThisRun = new Set<string>();
+    const pending = keyPoints.filter((keyPoint) => {
+      if (seenInThisRun.has(keyPoint.sourceHash) || existingHashes.has(keyPoint.sourceHash)) {
+        return false;
+      }
+      seenInThisRun.add(keyPoint.sourceHash);
+      return true;
+    });
+
+    if (!pending.length) {
+      new Notice(`找到 ${keyPoints.length} 段重点，但都已生成过卡片，本次无需处理`);
+      return;
+    }
+
+    new Notice(`找到 ${keyPoints.length} 段重点，本次将生成 ${pending.length} 张新卡片`);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const keyPoint of pending) {
+      try {
+        const card = await this.generateCardForKeyPoint(keyPoint, effectiveConfig, mode);
+        await this.saveKeyPointCardFile(file, card, mode, keyPoint);
+        successCount += 1;
+      } catch (error) {
+        failCount += 1;
+        console.error("批量生成重点卡片失败：", keyPoint, error);
+      }
+    }
+
+    if (successCount > 0) {
+      new Notice(`批量生成完成：新增 ${successCount} 张，失败 ${failCount} 张，已跳过重复重点`);
+      await this.trySyncToAnki();
+      return;
+    }
+
+    new Notice("批量生成失败，请查看插件控制台详情");
+  }
+
+  private async generateCardForKeyPoint(
+    keyPoint: MarkedKeyPoint,
+    configuration: FlashcardsSettings,
+    mode: CardMode
+  ): Promise<string> {
+    if (mode === "knowledge") {
+      return generateTwoSidedKnowledgeCard(keyPoint.text, configuration);
+    }
+
+    const result = await generateFlashcardsWithProgress(keyPoint.text, configuration, "qa");
+    return result.cards[0];
+  }
+
+  private async generateAndPreview(
+    editor: Editor,
+    view: MarkdownView,
+    configuration: FlashcardsSettings,
+    mode: CardMode,
+    sourceText: string
+  ) {
+    const effectiveConfig = this.getEffectiveConfig(configuration);
+    if (!effectiveConfig) {
+      return;
+    }
     const abortController = new AbortController();
     const preview = new PreviewModal(this.app, "", async (result) => {
       await this.saveCardsAndSync(view, result.text, mode);
@@ -248,19 +442,7 @@ export default class FlashcardsLLMPlugin extends Plugin {
   }
 
   private async saveCardsToSiblingFolder(file: TFile, text: string, mode: CardMode): Promise<string> {
-    const parentPath = file.parent?.path ?? "";
-    const folderName = `${file.basename}-card`;
-    const folderPath = normalizePath(parentPath ? `${parentPath}/${folderName}` : folderName);
-    const existingFolder = this.app.vault.getFolderByPath(folderPath);
-    const existingAbstractFile = this.app.vault.getAbstractFileByPath(folderPath);
-
-    if (!existingFolder) {
-      if (existingAbstractFile) {
-        throw new Error(`同名路径已存在但不是文件夹：${folderPath}`);
-      }
-      await this.app.vault.createFolder(folderPath);
-    }
-
+    const folderPath = await this.ensureCardFolder(file);
     const timestamp = this.formatTimestamp(new Date());
     const modeLabel = mode === "qa" ? "问答卡" : "知识点卡";
     const cardPath = await this.getUniqueCardPath(folderPath, `${file.basename}-card-${timestamp}.md`);
@@ -276,6 +458,89 @@ export default class FlashcardsLLMPlugin extends Plugin {
       `# ${file.basename} - ${modeLabel}`,
       "",
       text.trim(),
+      ""
+    ].join("\n");
+
+    await this.app.vault.create(cardPath, content);
+    return cardPath;
+  }
+
+  private getCardFolderPath(file: TFile): string {
+    const parentPath = file.parent?.path ?? "";
+    const folderName = `${file.basename}-card`;
+    return normalizePath(parentPath ? `${parentPath}/${folderName}` : folderName);
+  }
+
+  private async ensureCardFolder(file: TFile): Promise<string> {
+    const folderPath = this.getCardFolderPath(file);
+    const existingFolder = this.app.vault.getFolderByPath(folderPath);
+    const existingAbstractFile = this.app.vault.getAbstractFileByPath(folderPath);
+
+    if (!existingFolder) {
+      if (existingAbstractFile) {
+        throw new Error(`同名路径已存在但不是文件夹：${folderPath}`);
+      }
+      await this.app.vault.createFolder(folderPath);
+    }
+
+    return folderPath;
+  }
+
+  private async getExistingSourceHashes(folderPath: string): Promise<Set<string>> {
+    const hashes = new Set<string>();
+    const folder = this.app.vault.getFolderByPath(folderPath);
+    if (!folder) {
+      return hashes;
+    }
+
+    const files = this.getMarkdownFilesInFolder(folder);
+    for (const file of files) {
+      const content = await this.app.vault.cachedRead(file);
+      const matches = content.matchAll(/^source_hash:\s*["']?([^"'\s]+)["']?\s*$/gm);
+      for (const match of matches) {
+        hashes.add(match[1]);
+      }
+    }
+
+    return hashes;
+  }
+
+  private getMarkdownFilesInFolder(folder: TFolder): TFile[] {
+    const files: TFile[] = [];
+    for (const child of folder.children) {
+      if (child instanceof TFile && child.extension === "md") {
+        files.push(child);
+      } else if (child instanceof TFolder) {
+        files.push(...this.getMarkdownFilesInFolder(child));
+      }
+    }
+    return files;
+  }
+
+  private async saveKeyPointCardFile(
+    file: TFile,
+    card: string,
+    mode: CardMode,
+    keyPoint: MarkedKeyPoint
+  ): Promise<string> {
+    const folderPath = await this.ensureCardFolder(file);
+    const modeLabel = mode === "qa" ? "问答卡" : "知识点卡";
+    const cardPath = await this.getUniqueCardPath(folderPath, `${file.basename}-key-${keyPoint.sourceHash}.md`);
+    const content = [
+      "---",
+      `source: "[[${file.basename}]]"`,
+      `source_path: "${file.path}"`,
+      `source_hash: "${keyPoint.sourceHash}"`,
+      `key_marker_id: "${keyPoint.markerId}"`,
+      `key_index: ${keyPoint.index}`,
+      `created: "${new Date().toISOString()}"`,
+      `mode: "batch-${mode}"`,
+      "generator: \"闪卡 LLM（自改中文版）\"",
+      "---",
+      "",
+      `# ${file.basename} - 重点${modeLabel}`,
+      "",
+      renderCards([card]),
       ""
     ].join("\n");
 
