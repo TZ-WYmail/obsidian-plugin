@@ -1317,6 +1317,9 @@ var FlashcardsLLMPlugin = class extends import_obsidian4.Plugin {
   }
   async onload() {
     await this.loadSettings();
+    this.addRibbonIcon("repeat", "\u590D\u4E60\u5F53\u524D\u7B14\u8BB0\u724C\u7EC4", async () => {
+      await this.openAnkiReviewForActiveDeck();
+    }).addClass("flashcards-llm-review-ribbon");
     this.addCommand({
       id: "generate-qa-flashcards",
       name: "\u751F\u6210\u95EE\u7B54\u5361\u7247",

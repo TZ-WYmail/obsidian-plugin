@@ -73,6 +73,10 @@ export default class FlashcardsLLMPlugin extends Plugin {
   async onload() {
     await this.loadSettings();
 
+    this.addRibbonIcon("repeat", "复习当前笔记牌组", async () => {
+      await this.openAnkiReviewForActiveDeck();
+    }).addClass("flashcards-llm-review-ribbon");
+
     this.addCommand({
       id: "generate-qa-flashcards",
       name: "生成问答卡片",
