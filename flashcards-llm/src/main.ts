@@ -1,5 +1,5 @@
 import { Editor, MarkdownView, Notice, normalizePath, Plugin, TFile } from "obsidian";
-import { generateFlashcards, CardMode } from "./flashcards";
+import { CardMode, generateFlashcardsWithProgress, renderCards } from "./flashcards";
 import { GenerateModeModal, PreviewModal } from "./components";
 import { FlashcardsSettings, FlashcardsSettingsTab } from "./settings";
 
@@ -185,19 +185,42 @@ export default class FlashcardsLLMPlugin extends Plugin {
       maxTokens = 300;
     }
 
+    const effectiveConfig: FlashcardsSettings = {
+      ...configuration,
+      flashcardsCount,
+      maxTokens
+    };
+    const abortController = new AbortController();
+    const preview = new PreviewModal(this.app, "", async (result) => {
+      await this.saveCardsAndSync(view, result.text, mode);
+    }, {
+      generating: true,
+      onCancel: () => abortController.abort()
+    });
+    preview.open();
+    preview.setStatus(effectiveConfig.streaming ? "正在连接模型并准备流式生成..." : "正在等待模型完整响应...");
     new Notice("正在生成卡片...");
+
     try {
-      const effectiveConfig: FlashcardsSettings = {
-        ...configuration,
-        flashcardsCount,
-        maxTokens
-      };
-      const cards = await generateFlashcards(sourceText, effectiveConfig, mode);
-      const preview = new PreviewModal(this.app, cards, async (result) => {
-        await this.saveCardsAndSync(view, result.text, mode);
+      const result = await generateFlashcardsWithProgress(sourceText, effectiveConfig, mode, {
+        signal: abortController.signal,
+        onDelta: (delta) => {
+          preview.appendText(delta);
+        },
+        onRetry: () => {
+          preview.setText("");
+          preview.setStatus("流式响应为空，正在自动切换为非流式请求重试...");
+        }
       });
-      preview.open();
+
+      preview.setText(renderCards(result.cards));
+      preview.setGenerating(false);
+      preview.setStatus("生成完成，可编辑后确认保存并同步。");
     } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+      preview.setError("生成失败，请检查 API 配置或打开开发者控制台查看详情。");
       console.error("生成卡片失败：", error);
       new Notice("生成卡片失败，请查看插件控制台详情");
     }

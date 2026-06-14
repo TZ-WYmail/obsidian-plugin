@@ -143,11 +143,12 @@ function buildFallbackCard(source, mode) {
     "END"
   ].join("\n");
 }
-async function postJson(url, headers, body) {
+async function postJson(url, headers, body, signal) {
   const response = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
   if (!response.ok) {
     const details = await response.text().catch(() => "");
@@ -155,14 +156,78 @@ async function postJson(url, headers, body) {
   }
   return response;
 }
-async function readJsonResponse(response) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i;
-  const data = await response.json();
-  const choice = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0];
-  return (_i = (_h = (_g = (_f = (_e = (_d = (_c = (_b = choice == null ? void 0 : choice.message) == null ? void 0 : _b.content) != null ? _c : choice == null ? void 0 : choice.text) != null ? _d : data == null ? void 0 : data.output_text) != null ? _e : data == null ? void 0 : data.response) != null ? _f : "").trim) == null ? void 0 : _h.call(_g)) != null ? _i : "";
+function contentToText(content) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((item) => {
+      var _a, _b;
+      if (typeof item === "string")
+        return item;
+      if (item && typeof item === "object") {
+        const record = item;
+        return contentToText((_b = (_a = record.text) != null ? _a : record.content) != null ? _b : record.output_text);
+      }
+      return "";
+    }).join("");
+  }
+  return "";
 }
-async function readStreamResponse(response) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
+function extractResponseText(data) {
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+  const record = data;
+  const choices = record.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const choice = choices[0];
+    const delta = choice.delta;
+    const message = choice.message;
+    return contentToText(delta == null ? void 0 : delta.content) || contentToText(delta == null ? void 0 : delta.text) || contentToText(message == null ? void 0 : message.content) || contentToText(choice.text);
+  }
+  const outputText = contentToText(record.output_text) || contentToText(record.response);
+  if (outputText) {
+    return outputText;
+  }
+  const output = record.output;
+  if (Array.isArray(output)) {
+    return output.map((item) => contentToText(item == null ? void 0 : item.content)).join("");
+  }
+  return "";
+}
+async function readJsonResponse(response) {
+  const data = await response.json();
+  return extractResponseText(data).trim();
+}
+function payloadToDelta(payload) {
+  const trimmed = payload.trim();
+  if (!trimmed || trimmed === "[DONE]") {
+    return "";
+  }
+  try {
+    return extractResponseText(JSON.parse(trimmed));
+  } catch (e) {
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return payload;
+    }
+    return null;
+  }
+}
+function getDataPayloads(block) {
+  const dataLines = block.split("\n").map((line) => line.trimStart()).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).replace(/^ /, ""));
+  if (dataLines.length === 0) {
+    const trimmed = block.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  const canParseSeparately = dataLines.length > 1 && dataLines.every((line) => {
+    const trimmed = line.trim();
+    return trimmed === "[DONE]" || trimmed.startsWith("{") || trimmed.startsWith("[");
+  });
+  return canParseSeparately ? dataLines : [dataLines.join("\n")];
+}
+async function readStreamResponse(response, onDelta) {
+  var _a;
   const reader = (_a = response.body) == null ? void 0 : _a.getReader();
   if (!reader) {
     return "";
@@ -170,48 +235,68 @@ async function readStreamResponse(response) {
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let result = "";
+  const appendDelta = (delta) => {
+    if (!delta)
+      return;
+    result += delta;
+    onDelta == null ? void 0 : onDelta(delta);
+  };
+  const processEventBlock = (block) => {
+    const payloads = getDataPayloads(block);
+    for (const payload of payloads) {
+      const delta = payloadToDelta(payload);
+      if (delta === null) {
+        return false;
+      }
+      appendDelta(delta);
+    }
+    return true;
+  };
+  const processCompleteEvents = () => {
+    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let separatorIndex = buffer.indexOf("\n\n");
+    while (separatorIndex >= 0) {
+      const block = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      processEventBlock(block);
+      separatorIndex = buffer.indexOf("\n\n");
+    }
+  };
+  const processLooseDataLines = () => {
+    while (true) {
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex < 0)
+        return;
+      const line = buffer.slice(0, newlineIndex);
+      const trimmed = line.trimStart();
+      if (!trimmed) {
+        buffer = buffer.slice(newlineIndex + 1);
+        continue;
+      }
+      if (!trimmed.startsWith("data:")) {
+        return;
+      }
+      const delta = payloadToDelta(trimmed.slice(5).replace(/^ /, ""));
+      if (delta === null) {
+        return;
+      }
+      appendDelta(delta);
+      buffer = buffer.slice(newlineIndex + 1);
+    }
+  };
   while (true) {
     const { value, done } = await reader.read();
-    if (done)
+    if (done) {
+      buffer += decoder.decode();
       break;
+    }
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = (_b = lines.pop()) != null ? _b : "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data: "))
-        continue;
-      const payload = trimmed.slice(6);
-      if (payload === "[DONE]")
-        continue;
-      try {
-        const json = JSON.parse(payload);
-        const choice = (_c = json == null ? void 0 : json.choices) == null ? void 0 : _c[0];
-        result += (_h = (_g = (_f = (_d = choice == null ? void 0 : choice.delta) == null ? void 0 : _d.content) != null ? _f : (_e = choice == null ? void 0 : choice.message) == null ? void 0 : _e.content) != null ? _g : choice == null ? void 0 : choice.text) != null ? _h : "";
-      } catch (e) {
-        continue;
-      }
-    }
+    processCompleteEvents();
+    processLooseDataLines();
   }
-  const leftover = buffer.trim();
-  if (leftover.startsWith("data:")) {
-    const payload = leftover.slice(5).trim();
-    if (payload && payload !== "[DONE]") {
-      try {
-        const json = JSON.parse(payload);
-        const choice = (_i = json == null ? void 0 : json.choices) == null ? void 0 : _i[0];
-        result += (_n = (_m = (_l = (_j = choice == null ? void 0 : choice.delta) == null ? void 0 : _j.content) != null ? _l : (_k = choice == null ? void 0 : choice.message) == null ? void 0 : _k.content) != null ? _m : choice == null ? void 0 : choice.text) != null ? _n : "";
-      } catch (e) {
-      }
-    }
-  } else if (!result.trim() && leftover) {
-    try {
-      const json = JSON.parse(leftover);
-      const choice = (_o = json == null ? void 0 : json.choices) == null ? void 0 : _o[0];
-      result += (_t = (_s = (_r = (_q = (_p = choice == null ? void 0 : choice.message) == null ? void 0 : _p.content) != null ? _q : choice == null ? void 0 : choice.text) != null ? _r : json == null ? void 0 : json.output_text) != null ? _s : json == null ? void 0 : json.response) != null ? _t : "";
-    } catch (e) {
-      result += leftover;
-    }
+  processCompleteEvents();
+  if (buffer.trim()) {
+    processEventBlock(buffer);
   }
   return result.trim();
 }
@@ -237,7 +322,8 @@ function renderCards(cards) {
   return cards.map((card) => `<!-- CARD -->
 ${card.trim()}`).join("\n\n");
 }
-async function generateFlashcards(text, settings, mode) {
+async function generateFlashcardsWithProgress(text, settings, mode, progress = {}) {
+  var _a, _b;
   const cleanedText = stripExistingCards(text.replace(/<!--.*?-->/gs, ""));
   const prompt = buildPrompt(
     mode,
@@ -247,14 +333,29 @@ async function generateFlashcards(text, settings, mode) {
   );
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const response = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming));
-  let raw = settings.streaming ? await readStreamResponse(response) : await readJsonResponse(response);
+  const response = await postJson(
+    url,
+    headers,
+    buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming),
+    progress.signal
+  );
+  let raw = settings.streaming ? await readStreamResponse(response, progress.onDelta) : await readJsonResponse(response);
   if (!raw.trim() && settings.streaming) {
-    const retryResponse = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, false));
+    (_a = progress.onRetry) == null ? void 0 : _a.call(progress);
+    const retryResponse = await postJson(
+      url,
+      headers,
+      buildRequestBody(settings, prompt, cleanedText, mode, false),
+      progress.signal
+    );
     raw = await readJsonResponse(retryResponse);
+    if (raw.trim()) {
+      (_b = progress.onDelta) == null ? void 0 : _b.call(progress, raw);
+    }
   }
   const parsed = parseCards(raw);
-  return parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
+  const cards = parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
+  return { cards, raw };
 }
 
 // src/components.ts
@@ -328,12 +429,17 @@ var GenerateModeModal = class extends import_obsidian.Modal {
   }
 };
 var PreviewModal = class extends import_obsidian.Modal {
-  constructor(app, initialCards, onSubmit) {
+  constructor(app, initialText, onSubmit, options = {}) {
+    var _a;
     super(app);
-    this.textValue = renderCards(initialCards);
+    this.submitStarted = false;
+    this.textValue = initialText;
     this.onSubmit = onSubmit;
+    this.onCancel = options.onCancel;
+    this.generating = (_a = options.generating) != null ? _a : false;
   }
   onOpen() {
+    var _a;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("flashcards-llm-preview-modal");
@@ -341,15 +447,22 @@ var PreviewModal = class extends import_obsidian.Modal {
     contentEl.createEl("p", {
       text: "\u786E\u8BA4\u540E\u4F1A\u4FDD\u5B58\u5230\u5F53\u524D\u7B14\u8BB0\u540C\u76EE\u5F55\u7684\u300C\u7B14\u8BB0\u540D-card\u300D\u6587\u4EF6\u5939\uFF0C\u5E76\u5C1D\u8BD5\u8C03\u7528 Export to Anki \u540C\u6B65\uFF1B\u4E0D\u4F1A\u4FEE\u6539\u5F53\u524D\u7B14\u8BB0\u6B63\u6587\u3002"
     });
+    this.statusEl = contentEl.createEl("p", {
+      cls: "flashcards-llm-preview-status",
+      text: this.generating ? "\u6B63\u5728\u8FDE\u63A5\u6A21\u578B\u5E76\u6D41\u5F0F\u751F\u6210\uFF0C\u8BF7\u7A0D\u5019..." : "\u53EF\u7F16\u8F91\u540E\u786E\u8BA4\u4FDD\u5B58\u5E76\u540C\u6B65\u3002"
+    });
     this.textArea = new import_obsidian.TextAreaComponent(contentEl);
     this.textArea.setValue(this.textValue);
     this.textArea.inputEl.addClass("flashcards-llm-preview-textarea");
     this.textArea.inputEl.rows = 20;
+    this.textArea.inputEl.readOnly = this.generating;
     this.textArea.onChange((value) => {
       this.textValue = value;
+      this.updateSubmitState();
     });
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u786E\u8BA4\u751F\u6210\u5E76\u540C\u6B65").setCta().onClick(() => {
+        this.submitStarted = true;
         this.close();
         this.onSubmit({
           text: this.textValue.trim()
@@ -360,9 +473,69 @@ var PreviewModal = class extends import_obsidian.Modal {
         this.close();
       })
     );
+    this.submitButtonEl = (_a = contentEl.querySelector(".setting-item button.mod-cta")) != null ? _a : void 0;
+    this.updateSubmitState();
   }
   onClose() {
+    var _a;
+    if (this.generating && !this.submitStarted) {
+      (_a = this.onCancel) == null ? void 0 : _a.call(this);
+    }
     this.contentEl.empty();
+  }
+  setText(text) {
+    var _a;
+    this.textValue = text;
+    (_a = this.textArea) == null ? void 0 : _a.setValue(text);
+    this.scrollToBottom();
+    this.updateSubmitState();
+  }
+  appendText(delta) {
+    var _a;
+    if (!delta)
+      return;
+    this.textValue += delta;
+    (_a = this.textArea) == null ? void 0 : _a.setValue(this.textValue);
+    this.scrollToBottom();
+    this.updateSubmitState();
+  }
+  setGenerating(generating) {
+    this.generating = generating;
+    if (this.textArea) {
+      this.textArea.inputEl.readOnly = generating;
+    }
+    if (this.statusEl && generating) {
+      this.statusEl.removeClass("flashcards-llm-preview-status-error");
+      this.statusEl.setText("\u6B63\u5728\u6D41\u5F0F\u751F\u6210\u5361\u7247\u5185\u5BB9...");
+    }
+    this.updateSubmitState();
+  }
+  setStatus(message) {
+    var _a, _b;
+    (_a = this.statusEl) == null ? void 0 : _a.removeClass("flashcards-llm-preview-status-error");
+    (_b = this.statusEl) == null ? void 0 : _b.setText(message);
+  }
+  setError(message) {
+    var _a, _b;
+    this.generating = false;
+    if (this.textArea) {
+      this.textArea.inputEl.readOnly = false;
+    }
+    (_a = this.statusEl) == null ? void 0 : _a.addClass("flashcards-llm-preview-status-error");
+    (_b = this.statusEl) == null ? void 0 : _b.setText(message);
+    this.updateSubmitState();
+  }
+  updateSubmitState() {
+    if (this.submitButtonEl) {
+      this.submitButtonEl.disabled = this.generating || !this.textValue.trim();
+    }
+  }
+  scrollToBottom() {
+    var _a;
+    const inputEl = (_a = this.textArea) == null ? void 0 : _a.inputEl;
+    if (inputEl) {
+      inputEl.scrollTop = inputEl.scrollHeight;
+    }
   }
 };
 
@@ -662,19 +835,40 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
     if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
       maxTokens = 300;
     }
+    const effectiveConfig = {
+      ...configuration,
+      flashcardsCount,
+      maxTokens
+    };
+    const abortController = new AbortController();
+    const preview = new PreviewModal(this.app, "", async (result) => {
+      await this.saveCardsAndSync(view, result.text, mode);
+    }, {
+      generating: true,
+      onCancel: () => abortController.abort()
+    });
+    preview.open();
+    preview.setStatus(effectiveConfig.streaming ? "\u6B63\u5728\u8FDE\u63A5\u6A21\u578B\u5E76\u51C6\u5907\u6D41\u5F0F\u751F\u6210..." : "\u6B63\u5728\u7B49\u5F85\u6A21\u578B\u5B8C\u6574\u54CD\u5E94...");
     new import_obsidian3.Notice("\u6B63\u5728\u751F\u6210\u5361\u7247...");
     try {
-      const effectiveConfig = {
-        ...configuration,
-        flashcardsCount,
-        maxTokens
-      };
-      const cards = await generateFlashcards(sourceText, effectiveConfig, mode);
-      const preview = new PreviewModal(this.app, cards, async (result) => {
-        await this.saveCardsAndSync(view, result.text, mode);
+      const result = await generateFlashcardsWithProgress(sourceText, effectiveConfig, mode, {
+        signal: abortController.signal,
+        onDelta: (delta) => {
+          preview.appendText(delta);
+        },
+        onRetry: () => {
+          preview.setText("");
+          preview.setStatus("\u6D41\u5F0F\u54CD\u5E94\u4E3A\u7A7A\uFF0C\u6B63\u5728\u81EA\u52A8\u5207\u6362\u4E3A\u975E\u6D41\u5F0F\u8BF7\u6C42\u91CD\u8BD5...");
+        }
       });
-      preview.open();
+      preview.setText(renderCards(result.cards));
+      preview.setGenerating(false);
+      preview.setStatus("\u751F\u6210\u5B8C\u6210\uFF0C\u53EF\u7F16\u8F91\u540E\u786E\u8BA4\u4FDD\u5B58\u5E76\u540C\u6B65\u3002");
     } catch (error) {
+      if (abortController.signal.aborted) {
+        return;
+      }
+      preview.setError("\u751F\u6210\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5 API \u914D\u7F6E\u6216\u6253\u5F00\u5F00\u53D1\u8005\u63A7\u5236\u53F0\u67E5\u770B\u8BE6\u60C5\u3002");
       console.error("\u751F\u6210\u5361\u7247\u5931\u8D25\uFF1A", error);
       new import_obsidian3.Notice("\u751F\u6210\u5361\u7247\u5931\u8D25\uFF0C\u8BF7\u67E5\u770B\u63D2\u4EF6\u63A7\u5236\u53F0\u8BE6\u60C5");
     }

@@ -3,6 +3,17 @@ import { FlashcardsSettings } from "./settings";
 export type CardMode = "qa" | "knowledge";
 export type GeneratedFlashcards = string[];
 
+export interface FlashcardsGenerationProgress {
+  onDelta?: (delta: string) => void;
+  onRetry?: () => void;
+  signal?: AbortSignal;
+}
+
+export interface FlashcardsGenerationResult {
+  cards: GeneratedFlashcards;
+  raw: string;
+}
+
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
@@ -136,11 +147,17 @@ function buildFallbackCard(source: string, mode: CardMode): string {
   ].join("\n");
 }
 
-async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
+async function postJson(
+  url: string,
+  headers: Record<string, string>,
+  body: unknown,
+  signal?: AbortSignal
+): Promise<Response> {
   const response = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
   if (!response.ok) {
     const details = await response.text().catch(() => "");
@@ -149,19 +166,98 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   return response;
 }
 
-async function readJsonResponse(response: Response): Promise<string> {
-  const data = await response.json();
-  const choice = data?.choices?.[0];
-  return (
-    choice?.message?.content ??
-    choice?.text ??
-    data?.output_text ??
-    data?.response ??
-    ""
-  ).trim?.() ?? "";
+function contentToText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          return contentToText(record.text ?? record.content ?? record.output_text);
+        }
+        return "";
+      })
+      .join("");
+  }
+  return "";
 }
 
-async function readStreamResponse(response: Response): Promise<string> {
+function extractResponseText(data: unknown): string {
+  if (!data || typeof data !== "object") {
+    return "";
+  }
+  const record = data as Record<string, unknown>;
+  const choices = record.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const choice = choices[0] as Record<string, unknown>;
+    const delta = choice.delta as Record<string, unknown> | undefined;
+    const message = choice.message as Record<string, unknown> | undefined;
+    return (
+      contentToText(delta?.content) ||
+      contentToText(delta?.text) ||
+      contentToText(message?.content) ||
+      contentToText(choice.text)
+    );
+  }
+
+  const outputText = contentToText(record.output_text) || contentToText(record.response);
+  if (outputText) {
+    return outputText;
+  }
+
+  const output = record.output;
+  if (Array.isArray(output)) {
+    return output.map((item) => contentToText((item as Record<string, unknown>)?.content)).join("");
+  }
+
+  return "";
+}
+
+async function readJsonResponse(response: Response): Promise<string> {
+  const data = await response.json();
+  return extractResponseText(data).trim();
+}
+
+function payloadToDelta(payload: string): string | null {
+  const trimmed = payload.trim();
+  if (!trimmed || trimmed === "[DONE]") {
+    return "";
+  }
+
+  try {
+    return extractResponseText(JSON.parse(trimmed));
+  } catch {
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+      return payload;
+    }
+    return null;
+  }
+}
+
+function getDataPayloads(block: string): string[] {
+  const dataLines = block
+    .split("\n")
+    .map((line) => line.trimStart())
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""));
+
+  if (dataLines.length === 0) {
+    const trimmed = block.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  const canParseSeparately = dataLines.length > 1 && dataLines.every((line) => {
+    const trimmed = line.trim();
+    return trimmed === "[DONE]" || trimmed.startsWith("{") || trimmed.startsWith("[");
+  });
+
+  return canParseSeparately ? dataLines : [dataLines.join("\n")];
+}
+
+async function readStreamResponse(response: Response, onDelta?: (delta: string) => void): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) {
     return "";
@@ -169,46 +265,72 @@ async function readStreamResponse(response: Response): Promise<string> {
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let result = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data: ")) continue;
-      const payload = trimmed.slice(6);
-      if (payload === "[DONE]") continue;
-      try {
-        const json = JSON.parse(payload);
-        const choice = json?.choices?.[0];
-        result += choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? "";
-      } catch {
+
+  const appendDelta = (delta: string) => {
+    if (!delta) return;
+    result += delta;
+    onDelta?.(delta);
+  };
+
+  const processEventBlock = (block: string): boolean => {
+    const payloads = getDataPayloads(block);
+    for (const payload of payloads) {
+      const delta = payloadToDelta(payload);
+      if (delta === null) {
+        return false;
+      }
+      appendDelta(delta);
+    }
+    return true;
+  };
+
+  const processCompleteEvents = () => {
+    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let separatorIndex = buffer.indexOf("\n\n");
+    while (separatorIndex >= 0) {
+      const block = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      processEventBlock(block);
+      separatorIndex = buffer.indexOf("\n\n");
+    }
+  };
+
+  const processLooseDataLines = () => {
+    while (true) {
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex < 0) return;
+      const line = buffer.slice(0, newlineIndex);
+      const trimmed = line.trimStart();
+      if (!trimmed) {
+        buffer = buffer.slice(newlineIndex + 1);
         continue;
       }
-    }
-  }
-  const leftover = buffer.trim();
-  if (leftover.startsWith("data:")) {
-    const payload = leftover.slice(5).trim();
-    if (payload && payload !== "[DONE]") {
-      try {
-        const json = JSON.parse(payload);
-        const choice = json?.choices?.[0];
-        result += choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? "";
-      } catch {
-        // Ignore malformed stream tail chunks and let the retry/fallback path handle empty output.
+      if (!trimmed.startsWith("data:")) {
+        return;
       }
+      const delta = payloadToDelta(trimmed.slice(5).replace(/^ /, ""));
+      if (delta === null) {
+        return;
+      }
+      appendDelta(delta);
+      buffer = buffer.slice(newlineIndex + 1);
     }
-  } else if (!result.trim() && leftover) {
-    try {
-      const json = JSON.parse(leftover);
-      const choice = json?.choices?.[0];
-      result += choice?.message?.content ?? choice?.text ?? json?.output_text ?? json?.response ?? "";
-    } catch {
-      result += leftover;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      buffer += decoder.decode();
+      break;
     }
+    buffer += decoder.decode(value, { stream: true });
+    processCompleteEvents();
+    processLooseDataLines();
+  }
+
+  processCompleteEvents();
+  if (buffer.trim()) {
+    processEventBlock(buffer);
   }
   return result.trim();
 }
@@ -247,6 +369,16 @@ export async function generateFlashcards(
   settings: FlashcardsSettings,
   mode: CardMode
 ): Promise<GeneratedFlashcards> {
+  const result = await generateFlashcardsWithProgress(text, settings, mode);
+  return result.cards;
+}
+
+export async function generateFlashcardsWithProgress(
+  text: string,
+  settings: FlashcardsSettings,
+  mode: CardMode,
+  progress: FlashcardsGenerationProgress = {}
+): Promise<FlashcardsGenerationResult> {
   const cleanedText = stripExistingCards(text.replace(/<!--.*?-->/gs, ""));
   const prompt = buildPrompt(
     mode,
@@ -256,14 +388,29 @@ export async function generateFlashcards(
   );
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const response = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming));
-  let raw = settings.streaming ? await readStreamResponse(response) : await readJsonResponse(response);
+  const response = await postJson(
+    url,
+    headers,
+    buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming),
+    progress.signal
+  );
+  let raw = settings.streaming ? await readStreamResponse(response, progress.onDelta) : await readJsonResponse(response);
 
   if (!raw.trim() && settings.streaming) {
-    const retryResponse = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, false));
+    progress.onRetry?.();
+    const retryResponse = await postJson(
+      url,
+      headers,
+      buildRequestBody(settings, prompt, cleanedText, mode, false),
+      progress.signal
+    );
     raw = await readJsonResponse(retryResponse);
+    if (raw.trim()) {
+      progress.onDelta?.(raw);
+    }
   }
 
   const parsed = parseCards(raw);
-  return parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
+  const cards = parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
+  return { cards, raw };
 }

@@ -9,6 +9,15 @@
   font-family: var(--font-monospace);
 }
 
+.flashcards-llm-preview-status {
+  color: var(--text-muted);
+  margin: 8px 0 12px;
+}
+
+.flashcards-llm-preview-status-error {
+  color: var(--text-error);
+}
+
 .flashcards-llm-floating-bar {
   position: absolute;
   transform: translateX(-50%);
