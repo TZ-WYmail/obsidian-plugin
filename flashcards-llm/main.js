@@ -90,6 +90,15 @@ function buildModeInstructions(mode) {
       "A: ...",
       "END",
       "\u6BCF\u4E2A\u95EE\u9898\u53EA\u8003\u5BDF\u4E00\u4E2A\u8BB0\u5FC6\u70B9\uFF0C\u95EE\u9898\u548C\u7B54\u6848\u90FD\u4F7F\u7528\u4E2D\u6587\uFF0C\u7B54\u6848\u4FDD\u6301\u7B80\u6D01\u51C6\u786E\u3002",
+      "\u5148\u4ECE\u6750\u6599\u4E2D\u63D0\u53D6\u4E00\u4E2A\u53EF\u547D\u540D\u7684\u8003\u5BDF\u5BF9\u8C61\uFF0C\u518D\u56F4\u7ED5\u5B83\u63D0\u95EE\uFF1B\u8003\u5BDF\u5BF9\u8C61\u53EF\u4EE5\u662F\u672F\u8BED\u3001\u51FD\u6570\u540D\u3001\u7C7B\u540D\u3001\u89C4\u5219\u540D\u3001\u6761\u4EF6\u3001\u6807\u9898\u5173\u952E\u8BCD\u6216\u5217\u8868\u6240\u5C5E\u4E3B\u9898\u3002",
+      "Q \u5FC5\u987B\u5305\u542B\u539F\u6587\u91CC\u7684\u5177\u4F53\u951A\u70B9\uFF1A\u672F\u8BED\u3001\u51FD\u6570\u540D\u3001\u7C7B\u540D\u3001\u6807\u9898\u5173\u952E\u8BCD\u3001\u89C4\u5219\u540D\u6216\u6761\u4EF6\uFF0C\u4E0D\u80FD\u53EA\u95EE\u62BD\u8C61\u603B\u7ED3\u3002",
+      "\u4E25\u7981\u8F93\u51FA\u8FD9\u7C7B\u6CDB\u5316\u95EE\u9898\uFF1A`\u8FD9\u6BB5\u5185\u5BB9\u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F`\u3001`\u4E0A\u8FF0\u5185\u5BB9\u8BF4\u660E\u4E86\u4EC0\u4E48\uFF1F`\u3001`\u8BF7\u6982\u62EC\u8FD9\u6BB5\u6750\u6599`\u3001`\u8FD9\u4E2A\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F`\u3001`\u8FD9\u6BB5\u6750\u6599\u4E3B\u8981\u8BB2\u4E86\u4EC0\u4E48\uFF1F`\u3002",
+      "\u4E25\u7981\u628A\u4E66\u540D\u3001\u7AE0\u8282\u540D\u6216\u6587\u4EF6\u540D\u5F53\u4F5C\u552F\u4E00\u63D0\u95EE\u5BF9\u8C61\uFF0C\u4F8B\u5982 `\u6D41\u7545\u7684Python \u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F` \u4ECD\u7136\u662F\u4E0D\u5408\u683C\u9898\u5E72\u3002",
+      "\u5982\u679C\u539F\u6587\u662F\u6807\u9898\u52A0\u5217\u8868\uFF0C\u4F18\u5148\u56F4\u7ED5\u6807\u9898\u751F\u6210\u5177\u4F53\u95EE\u9898\uFF0C\u4F8B\u5982 `MutableSequence\uFF08\u53EF\u53D8\u5E8F\u5217\uFF09\u7684\u6269\u5C55\u65B9\u6CD5\u6709\u54EA\u4E9B\uFF1F`\u3002",
+      "\u5982\u679C\u539F\u6587\u662F\u4E00\u7EC4\u65B9\u6CD5\u3001\u5C5E\u6027\u6216\u6B65\u9AA4\uFF0CQ \u8981\u95EE\u6240\u5C5E\u5BF9\u8C61\u7684\u6E05\u5355\u6216\u5DEE\u5F02\uFF0CA \u7528\u987F\u53F7\u5217\u51FA\u540D\u79F0\u5E76\u9644\u6781\u77ED\u89E3\u91CA\u3002",
+      "\u5408\u683C\u793A\u4F8B\uFF1A`Q: MutableSequence\uFF08\u53EF\u53D8\u5E8F\u5217\uFF09\u7684\u6269\u5C55\u65B9\u6CD5\u6709\u54EA\u4E9B\uFF1F` `A: setitem\u3001delitem\u3001insert\u3001append\u3001reverse\u3001extend\u3001pop\u3001remove\u3001iadd\u3002`",
+      "A \u4E0D\u8981\u6574\u6BB5\u7167\u6284\u539F\u6587\uFF1B\u5982\u679C\u7B54\u6848\u662F\u5217\u8868\uFF0C\u53EA\u4FDD\u7559\u5FC5\u8981\u9879\u76EE\u548C\u6781\u77ED\u89E3\u91CA\uFF0C\u907F\u514D\u628A\u4E00\u6574\u6BB5\u7B14\u8BB0\u585E\u8FDB\u540C\u4E00\u5F20\u5361\u3002",
+      "\u8F93\u51FA\u524D\u81EA\u68C0\uFF1A\u53EA\u770B Q \u65F6\uFF0C\u5B66\u4E60\u8005\u5FC5\u987B\u77E5\u9053\u8981\u56DE\u5FC6\u54EA\u4E2A\u5177\u4F53\u5BF9\u8C61\uFF1B\u5982\u679C\u4E0D\u77E5\u9053\uFF0C\u5C31\u91CD\u5199 Q\u3002",
       "\u5373\u4F7F\u6750\u6599\u5F88\u77ED\uFF0C\u4E5F\u5FC5\u987B\u81F3\u5C11\u751F\u6210 1 \u5F20\u5361\u7247\uFF0C\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u5185\u5BB9\u3002"
     ];
   }
@@ -108,6 +117,7 @@ function buildModeInstructions(mode) {
     "A: ...",
     "END",
     "\u77E5\u8BC6\u70B9\u8981\u539F\u5B50\u5316\uFF0C\u907F\u514D\u628A\u591A\u4E2A\u65E0\u5173\u4E8B\u5B9E\u585E\u8FDB\u540C\u4E00\u5F20\u5361\u3002",
+    "\u95EE\u7B54\u7ED3\u6784\u4E2D\u7684 Q \u5FC5\u987B\u5305\u542B\u5177\u4F53\u672F\u8BED\u6216\u6807\u9898\u5173\u952E\u8BCD\uFF0C\u4E25\u7981\u4F7F\u7528 `\u8FD9\u6BB5\u5185\u5BB9\u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F` \u8FD9\u7C7B\u6CDB\u5316\u9898\u5E72\u3002",
     "\u5373\u4F7F\u6750\u6599\u5F88\u77ED\uFF0C\u4E5F\u5FC5\u987B\u81F3\u5C11\u751F\u6210 1 \u5F20\u5361\u7247\uFF0C\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u5185\u5BB9\u3002"
   ];
 }
@@ -117,6 +127,8 @@ function buildTwoSidedKnowledgePrompt(additionalPrompt) {
     "\u7528\u6237\u4F1A\u63D0\u4F9B\u4E00\u6BB5\u5DF2\u7ECF\u5212\u91CD\u70B9\u7684\u7B14\u8BB0\u539F\u6587\u3002",
     "\u8BF7\u53EA\u4E3A\u8FD9\u6BB5\u539F\u6587\u751F\u6210\u4E00\u5F20\u53CC\u9762\u77E5\u8BC6\u70B9\u5361\u7247\u7684\u6B63\u9762\u63D0\u793A\u3002",
     "\u6B63\u9762\u63D0\u793A\u5FC5\u987B\u662F\u4E00\u4E2A\u7B80\u6D01\u7684\u95EE\u9898\u3001\u6982\u5FF5\u63D0\u793A\u6216\u56DE\u5FC6\u7EBF\u7D22\uFF0C\u7528\u4E2D\u6587\u8F93\u51FA\u3002",
+    "\u6B63\u9762\u63D0\u793A\u5FC5\u987B\u5305\u542B\u539F\u6587\u4E2D\u7684\u5177\u4F53\u672F\u8BED\u3001\u6807\u9898\u5173\u952E\u8BCD\u3001\u51FD\u6570\u540D\u3001\u7C7B\u540D\u6216\u89C4\u5219\u540D\u3002",
+    "\u4E25\u7981\u8F93\u51FA `\u8FD9\u6BB5\u91CD\u70B9\u539F\u6587\u8BF4\u660E\u4E86\u4EC0\u4E48\u6838\u5FC3\u77E5\u8BC6\u70B9\uFF1F`\u3001`\u8FD9\u6BB5\u5185\u5BB9\u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F` \u7B49\u6CDB\u5316\u63D0\u793A\u3002",
     "\u4E0D\u8981\u5728\u6B63\u9762\u91CC\u76F4\u63A5\u6CC4\u9732\u7B54\u6848\uFF0C\u4E0D\u8981\u590D\u8FF0\u6574\u6BB5\u539F\u6587\u3002",
     "\u4E0D\u8981\u8F93\u51FA `Q:`\u3001`A:`\u3001\u6807\u9898\u3001\u89E3\u91CA\u3001\u5217\u8868\u3001\u4EE3\u7801\u5757\u6216 Obsidian_to_Anki \u7ED3\u6784\u3002",
     "\u53EA\u8F93\u51FA\u6B63\u9762\u63D0\u793A\u6587\u672C\u672C\u8EAB\u3002"
@@ -140,6 +152,9 @@ function buildPrompt(mode, count, systemPrompt, additionalPrompt) {
     "\u6BCF\u5F20\u5361\u7247\u90FD\u5FC5\u987B\u4EE5 `<!-- CARD -->` \u5F00\u59CB\u3002",
     "\u4E0D\u8981\u5728\u5361\u7247\u5916\u6DFB\u52A0\u89E3\u91CA\u3001\u6807\u9898\u3001\u9879\u76EE\u7B26\u53F7\u6216\u989D\u5916\u8BF4\u660E\u3002",
     "\u6BCF\u5F20\u5361\u7247\u53EA\u8986\u76D6\u4E00\u4E2A\u72EC\u7ACB\u8BB0\u5FC6\u70B9\uFF0C\u907F\u514D\u91CD\u590D\u3002",
+    "\u6240\u6709\u95EE\u9898\u90FD\u5FC5\u987B\u5177\u4F53\u3001\u53EF\u56DE\u7B54\u3001\u53EF\u590D\u4E60\uFF1B\u9898\u5E72\u5FC5\u987B\u66B4\u9732\u88AB\u8003\u5BDF\u5BF9\u8C61\uFF0C\u4F46\u4E0D\u80FD\u6CC4\u9732\u7B54\u6848\u3002",
+    "\u7981\u6B62\u628A `\u8FD9\u6BB5\u5185\u5BB9`\u3001`\u4E0A\u8FF0\u5185\u5BB9`\u3001`\u6750\u6599`\u3001`\u6838\u5FC3\u77E5\u8BC6\u70B9`\u3001`\u4E3B\u8981\u5185\u5BB9` \u5F53\u4F5C\u4E3B\u8981\u63D0\u95EE\u5BF9\u8C61\u3002",
+    "\u7981\u6B62\u8F93\u51FA\u9700\u8981\u91CD\u65B0\u9605\u8BFB\u539F\u6587\u624D\u80FD\u77E5\u9053\u5728\u95EE\u4EC0\u4E48\u7684\u95EE\u9898\uFF1B\u95EE\u9898\u5FC5\u987B\u8131\u79BB\u539F\u6587\u4E5F\u80FD\u660E\u786E\u8003\u5BDF\u5BF9\u8C61\u3002",
     "\u5982\u679C\u65E0\u6CD5\u751F\u6210\u5B8C\u7F8E\u5361\u7247\uFF0C\u4E5F\u8981\u8F93\u51FA\u6700\u5408\u7406\u7684\u4E00\u5F20\u5361\u7247\uFF0C\u7EDD\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u767D\u3002",
     ...buildModeInstructions(mode)
   ];
@@ -159,6 +174,189 @@ function parseCards(raw) {
   const parts = cleaned.includes("<!-- CARD -->") ? cleaned.split(/<!-- CARD -->/g) : [cleaned];
   return parts.map((part) => part.trim()).map(stripOuterCodeFence).filter((card) => card.length > 0);
 }
+function extractBasicCardFields(card) {
+  const match = card.match(/START\s*\nBasic\s*\nQ:\s*([\s\S]*?)\nA:\s*([\s\S]*?)\nEND/i);
+  if (!match) {
+    return null;
+  }
+  return {
+    question: match[1].trim(),
+    answer: match[2].trim()
+  };
+}
+function improveCardQuality(cards, source, mode) {
+  const fallback = buildFallbackCard(source, mode);
+  const improved = cards.map((card) => {
+    const fields = extractBasicCardFields(card);
+    if (mode === "qa" && !fields) {
+      return fallback;
+    }
+    return fields && isLowQualityBasicCard(fields, source) ? fallback : card;
+  });
+  return dedupeCards(improved);
+}
+function dedupeCards(cards) {
+  const seen = /* @__PURE__ */ new Set();
+  return cards.filter((card) => {
+    const normalized = card.replace(/\s+/g, " ").trim();
+    if (seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+}
+function isLowQualityBasicCard(fields, source) {
+  if (isLowQualityQuestionText(fields.question, source)) {
+    return true;
+  }
+  const answer = fields.answer.replace(/\s+/g, " ").trim();
+  if (!answer) {
+    return true;
+  }
+  return isBloatedCopyAnswer(answer, source);
+}
+function isLowQualityQuestionText(questionText, source) {
+  const question = questionText.replace(/\s+/g, " ").trim();
+  const anchors = extractSourceAnchors(source);
+  if (!question) {
+    return true;
+  }
+  if (hasBannedGenericQuestion(question)) {
+    return true;
+  }
+  if (question.length < 8 && !containsSourceAnchor(question, source)) {
+    return true;
+  }
+  return anchors.length > 0 && looksLikeDetachedQuestion(question) && !containsSourceAnchor(question, source);
+}
+function hasBannedGenericQuestion(question) {
+  const compact = question.replace(/\s+/g, "");
+  return /这段|上述|原文|本段|本节|这份?材料|这些?内容|该内容|核心知识点|主要内容|主要讲.*什么|讲了什么|说明.*什么|总结|概括|知识点是什么|是什么核心/.test(compact);
+}
+function looksLikeDetachedQuestion(question) {
+  return /^(?:什么|哪些|如何|为什么|怎样|怎么|请|列出|说明|解释|总结|概括)/.test(question);
+}
+function isBloatedCopyAnswer(answer, source) {
+  const normalizedAnswer = normalizeSourceText(answer);
+  if (normalizedAnswer.length < 360) {
+    return false;
+  }
+  const normalizedSource = normalizeSourceText(source);
+  const hasMarkdownStructure = /#{1,6}\s|(?:^|\s)(?:[-+*]|\d+[.)])\s+/.test(answer);
+  return hasMarkdownStructure && normalizedSource.includes(normalizedAnswer.slice(0, 120));
+}
+function containsSourceAnchor(question, source) {
+  const normalizedQuestion = question.toLowerCase();
+  return extractSourceAnchors(source).some((anchor) => normalizedQuestion.includes(anchor.toLowerCase()));
+}
+function extractSourceAnchors(source) {
+  const cleaned = cleanSourceTextForCard(source);
+  const anchors = /* @__PURE__ */ new Set();
+  const topic = extractTopicFromSource(cleaned);
+  if (topic) {
+    anchors.add(topic);
+    for (const part of topic.split(/[（()：:，,、\s]+/g)) {
+      if (part.trim().length >= 2) {
+        anchors.add(part.trim());
+      }
+    }
+    const chineseTermPattern = /[\u4e00-\u9fff]{2,}/g;
+    let chineseTermMatch;
+    while ((chineseTermMatch = chineseTermPattern.exec(topic)) !== null) {
+      anchors.add(chineseTermMatch[0]);
+    }
+  }
+  const codeTermPattern = /`([^`\n]{2,80})`/g;
+  let codeTermMatch;
+  while ((codeTermMatch = codeTermPattern.exec(cleaned)) !== null) {
+    anchors.add(stripMarkdownInline(codeTermMatch[1]));
+  }
+  const identifierPattern = /\b[A-Za-z_][A-Za-z0-9_]{2,}\b/g;
+  let identifierMatch;
+  while ((identifierMatch = identifierPattern.exec(cleaned)) !== null) {
+    anchors.add(identifierMatch[0]);
+  }
+  return Array.from(anchors).map((anchor) => anchor.trim()).filter((anchor) => anchor.length >= 2 && anchor.length <= 80).slice(0, 40);
+}
+function extractTopicFromSource(source) {
+  var _a;
+  const lines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    const heading = line.match(/^#{1,6}\s+(.+?)(?:[：:]\s*)?$/);
+    if (heading) {
+      return stripMarkdownInline(heading[1]).replace(/[：:]\s*$/, "").trim();
+    }
+  }
+  const firstLine = (_a = lines.find((line) => !/^(?:[-+*]|\d+[.)])\s+/.test(line))) != null ? _a : "";
+  if (firstLine && firstLine.length <= 100) {
+    return stripMarkdownInline(firstLine).replace(/[：:]\s*$/, "").trim();
+  }
+  return "";
+}
+function extractListItemTerms(source) {
+  const cleaned = cleanSourceTextForCard(source);
+  const terms = [];
+  for (const line of cleaned.split(/\r?\n/)) {
+    const item = line.match(/^\s*(?:[-+*]|\d+[.)])\s+(.+)$/);
+    if (!item) {
+      continue;
+    }
+    const term = extractTermFromListItem(item[1]);
+    if (term) {
+      terms.push(term);
+    }
+  }
+  if (!terms.length) {
+    const looseListPattern = /(?:^|\s)-\s+([^。；;\n]+)/g;
+    let looseListMatch;
+    while ((looseListMatch = looseListPattern.exec(cleaned)) !== null) {
+      const term = extractTermFromListItem(looseListMatch[1]);
+      if (term) {
+        terms.push(term);
+      }
+    }
+  }
+  return Array.from(new Set(terms)).slice(0, 16);
+}
+function extractTermFromListItem(item) {
+  var _a;
+  const codeTerm = item.match(/`([^`]+)`/);
+  if (codeTerm) {
+    return stripMarkdownInline(codeTerm[1]);
+  }
+  const beforeExplanation = (_a = item.split(/[：:，,。；;\-—–]/)[0]) != null ? _a : "";
+  return stripMarkdownInline(beforeExplanation).trim();
+}
+function stripMarkdownInline(text) {
+  return text.replace(/`([^`]+)`/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/\[([^\]]+)]\([^)]+\)/g, "$1").replace(/^#+\s+/, "").trim();
+}
+function buildSpecificQuestion(source) {
+  const topic = extractTopicFromSource(source);
+  const terms = extractListItemTerms(source);
+  const anchors = extractSourceAnchors(source);
+  if (terms.length >= 2 && topic) {
+    return `${topic}\u6709\u54EA\u4E9B\uFF1F`;
+  }
+  if (terms.length >= 2 && anchors[0]) {
+    return `\u4E0E ${anchors[0]} \u76F8\u5173\u7684\u5173\u952E\u9879\u76EE\u6709\u54EA\u4E9B\uFF1F`;
+  }
+  if (topic) {
+    return `${topic}\u7684\u5173\u952E\u7ED3\u8BBA\u662F\u4EC0\u4E48\uFF1F`;
+  }
+  if (anchors[0]) {
+    return `${anchors[0]} \u7684\u4F5C\u7528\u6216\u542B\u4E49\u662F\u4EC0\u4E48\uFF1F`;
+  }
+  return "\u8FD9\u6761\u7B14\u8BB0\u5BF9\u5E94\u7684\u5177\u4F53\u7ED3\u8BBA\u662F\u4EC0\u4E48\uFF1F";
+}
+function buildConciseFallbackAnswer(source) {
+  const terms = extractListItemTerms(source);
+  if (terms.length >= 2) {
+    const shown = terms.slice(0, 12).join("\u3001");
+    return `\u5305\u62EC ${shown}${terms.length > 12 ? " \u7B49" : ""}\u3002`;
+  }
+  return normalizeSourceText(source).slice(0, 260);
+}
 function buildFallbackCard(source, mode) {
   const compactSource = normalizeSourceText(source).slice(0, 500);
   if (!compactSource) {
@@ -175,8 +373,8 @@ function buildFallbackCard(source, mode) {
   return [
     "START",
     "Basic",
-    "Q: \u8FD9\u6BB5\u5185\u5BB9\u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F",
-    `A: ${compactSource}`,
+    `Q: ${buildSpecificQuestion(source)}`,
+    `A: ${buildConciseFallbackAnswer(source)}`,
     "END"
   ].join("\n");
 }
@@ -188,7 +386,7 @@ function buildTwoSidedKnowledgeFallback(source) {
   return [
     "START",
     "Basic",
-    "Q: \u8FD9\u6BB5\u91CD\u70B9\u539F\u6587\u8BF4\u660E\u4E86\u4EC0\u4E48\u6838\u5FC3\u77E5\u8BC6\u70B9\uFF1F",
+    `Q: ${buildSpecificQuestion(source)}`,
     `A: ${formatOriginalTextForAnswer(compactSource)}`,
     "END"
   ].join("\n");
@@ -380,7 +578,7 @@ ${card.trim()}`).join("\n\n");
 }
 async function generateFlashcardsWithProgress(text, settings, mode, progress = {}) {
   var _a, _b;
-  const cleanedText = stripExistingCards(text.replace(/<!--.*?-->/gs, ""));
+  const cleanedText = stripExistingCards(text).replace(/<!--.*?-->/gs, "").trim();
   const prompt = buildPrompt(
     mode,
     settings.flashcardsCount,
@@ -410,11 +608,11 @@ async function generateFlashcardsWithProgress(text, settings, mode, progress = {
     }
   }
   const parsed = parseCards(raw);
-  const cards = parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
+  const cards = parsed.length ? improveCardQuality(parsed, cleanedText, mode) : [buildFallbackCard(cleanedText, mode)];
   return { cards, raw };
 }
 async function generateTwoSidedKnowledgeCard(text, settings, progress = {}) {
-  const cleanedText = cleanSourceTextForCard(stripExistingCards(text.replace(/<!--.*?-->/gs, "")));
+  const cleanedText = cleanSourceTextForCard(stripExistingCards(text).replace(/<!--.*?-->/gs, ""));
   const prompt = buildTwoSidedKnowledgePrompt(settings.additionalPrompt || "");
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
@@ -426,7 +624,7 @@ async function generateTwoSidedKnowledgeCard(text, settings, progress = {}) {
   );
   const raw = await readJsonResponse(response);
   const front = cleanupSingleLine(raw);
-  if (!front) {
+  if (!front || isLowQualityQuestionText(front, cleanedText)) {
     return buildTwoSidedKnowledgeFallback(cleanedText);
   }
   return [
