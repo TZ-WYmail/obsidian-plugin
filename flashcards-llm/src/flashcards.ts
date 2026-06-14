@@ -3,9 +3,16 @@ import { FlashcardsSettings } from "./settings";
 export type CardMode = "qa" | "knowledge";
 export type GeneratedFlashcards = string[];
 
+export interface FlashcardsRetryInfo {
+  nextAttempt: number;
+  maxAttempts: number;
+  reason: string;
+  delayMs: number;
+}
+
 export interface FlashcardsGenerationProgress {
   onDelta?: (delta: string) => void;
-  onRetry?: () => void;
+  onRetry?: (info: FlashcardsRetryInfo) => void;
   signal?: AbortSignal;
 }
 
@@ -458,6 +465,74 @@ function buildTwoSidedKnowledgeFallback(source: string): string {
   ].join("\n");
 }
 
+const LLM_MAX_ATTEMPTS = 3;
+const LLM_RETRY_DELAYS_MS = [800, 1600];
+
+class LlmRequestError extends Error {
+  status?: number;
+  retryable: boolean;
+
+  constructor(message: string, retryable: boolean, status?: number) {
+    super(message);
+    this.name = "LlmRequestError";
+    this.status = status;
+    this.retryable = retryable;
+  }
+}
+
+function isRetryableHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function isAbortError(error: unknown, signal?: AbortSignal): boolean {
+  return signal?.aborted === true || (error instanceof Error && error.name === "AbortError");
+}
+
+function isRetryableLlmError(error: unknown, signal?: AbortSignal): boolean {
+  if (isAbortError(error, signal)) {
+    return false;
+  }
+  if (error instanceof LlmRequestError) {
+    return error.retryable;
+  }
+  return true;
+}
+
+function describeRetryReason(error: unknown): string {
+  if (error instanceof LlmRequestError) {
+    return error.status ? `LLM 请求返回 ${error.status}` : error.message;
+  }
+  if (error instanceof Error) {
+    return error.message || "LLM 连接异常";
+  }
+  return "LLM 连接异常";
+}
+
+function getRetryDelay(attempt: number): number {
+  return LLM_RETRY_DELAYS_MS[Math.min(attempt - 1, LLM_RETRY_DELAYS_MS.length - 1)] ?? 1600;
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("请求已取消"));
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 async function postJson(
   url: string,
   headers: Record<string, string>,
@@ -472,7 +547,11 @@ async function postJson(
   });
   if (!response.ok) {
     const details = await response.text().catch(() => "");
-    throw new Error(`请求失败：${response.status} ${response.statusText}${details ? ` - ${details}` : ""}`);
+    throw new LlmRequestError(
+      `请求失败：${response.status} ${response.statusText}${details ? ` - ${details}` : ""}`,
+      isRetryableHttpStatus(response.status),
+      response.status
+    );
   }
   return response;
 }
@@ -688,6 +767,60 @@ function buildRequestBody(
   return requestBody;
 }
 
+async function requestCompletionTextWithRetry(
+  settings: FlashcardsSettings,
+  url: string,
+  headers: Record<string, string>,
+  prompt: string,
+  cleanedText: string,
+  mode: CardMode,
+  stream: boolean,
+  progress: FlashcardsGenerationProgress
+): Promise<string> {
+  let useStreaming = stream;
+
+  for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await postJson(
+        url,
+        headers,
+        buildRequestBody(settings, prompt, cleanedText, mode, useStreaming),
+        progress.signal
+      );
+      const raw = useStreaming ? await readStreamResponse(response, progress.onDelta) : await readJsonResponse(response);
+
+      if (raw.trim() || !useStreaming || attempt >= LLM_MAX_ATTEMPTS) {
+        return raw;
+      }
+
+      const delayMs = getRetryDelay(attempt);
+      useStreaming = false;
+      progress.onRetry?.({
+        nextAttempt: attempt + 1,
+        maxAttempts: LLM_MAX_ATTEMPTS,
+        reason: "流式响应为空，切换为非流式请求",
+        delayMs
+      });
+      await waitForRetry(delayMs, progress.signal);
+    } catch (error) {
+      if (!isRetryableLlmError(error, progress.signal) || attempt >= LLM_MAX_ATTEMPTS) {
+        throw error;
+      }
+
+      const delayMs = getRetryDelay(attempt);
+      progress.onRetry?.({
+        nextAttempt: attempt + 1,
+        maxAttempts: LLM_MAX_ATTEMPTS,
+        reason: describeRetryReason(error),
+        delayMs
+      });
+      await waitForRetry(delayMs, progress.signal);
+    }
+  }
+
+  return "";
+}
+
 export function renderCards(cards: string[]): string {
   return cards.map((card) => `<!-- CARD -->\n${card.trim()}`).join("\n\n");
 }
@@ -716,27 +849,16 @@ export async function generateFlashcardsWithProgress(
   );
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const response = await postJson(
+  const raw = await requestCompletionTextWithRetry(
+    settings,
     url,
     headers,
-    buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming),
-    progress.signal
+    prompt,
+    cleanedText,
+    mode,
+    settings.streaming,
+    progress
   );
-  let raw = settings.streaming ? await readStreamResponse(response, progress.onDelta) : await readJsonResponse(response);
-
-  if (!raw.trim() && settings.streaming) {
-    progress.onRetry?.();
-    const retryResponse = await postJson(
-      url,
-      headers,
-      buildRequestBody(settings, prompt, cleanedText, mode, false),
-      progress.signal
-    );
-    raw = await readJsonResponse(retryResponse);
-    if (raw.trim()) {
-      progress.onDelta?.(raw);
-    }
-  }
 
   const parsed = parseCards(raw);
   const cards = parsed.length ? improveCardQuality(parsed, cleanedText, mode) : [buildFallbackCard(cleanedText, mode)];
@@ -752,13 +874,16 @@ export async function generateTwoSidedKnowledgeCard(
   const prompt = buildTwoSidedKnowledgePrompt(settings.additionalPrompt || "");
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const response = await postJson(
+  const raw = await requestCompletionTextWithRetry(
+    settings,
     url,
     headers,
-    buildRequestBody(settings, prompt, normalizeSourceText(cleanedText), "knowledge", false),
-    progress.signal
+    prompt,
+    normalizeSourceText(cleanedText),
+    "knowledge",
+    false,
+    progress
   );
-  const raw = await readJsonResponse(response);
   const front = cleanupSingleLine(raw);
 
   if (!front || isLowQualityQuestionText(front, cleanedText)) {

@@ -391,6 +391,64 @@ function buildTwoSidedKnowledgeFallback(source) {
     "END"
   ].join("\n");
 }
+var LLM_MAX_ATTEMPTS = 3;
+var LLM_RETRY_DELAYS_MS = [800, 1600];
+var LlmRequestError = class extends Error {
+  constructor(message, retryable, status) {
+    super(message);
+    this.name = "LlmRequestError";
+    this.status = status;
+    this.retryable = retryable;
+  }
+};
+function isRetryableHttpStatus(status) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+function isAbortError(error, signal) {
+  return (signal == null ? void 0 : signal.aborted) === true || error instanceof Error && error.name === "AbortError";
+}
+function isRetryableLlmError(error, signal) {
+  if (isAbortError(error, signal)) {
+    return false;
+  }
+  if (error instanceof LlmRequestError) {
+    return error.retryable;
+  }
+  return true;
+}
+function describeRetryReason(error) {
+  if (error instanceof LlmRequestError) {
+    return error.status ? `LLM \u8BF7\u6C42\u8FD4\u56DE ${error.status}` : error.message;
+  }
+  if (error instanceof Error) {
+    return error.message || "LLM \u8FDE\u63A5\u5F02\u5E38";
+  }
+  return "LLM \u8FDE\u63A5\u5F02\u5E38";
+}
+function getRetryDelay(attempt) {
+  var _a;
+  return (_a = LLM_RETRY_DELAYS_MS[Math.min(attempt - 1, LLM_RETRY_DELAYS_MS.length - 1)]) != null ? _a : 1600;
+}
+function waitForRetry(delayMs, signal) {
+  if (delayMs <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal == null ? void 0 : signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("\u8BF7\u6C42\u5DF2\u53D6\u6D88"));
+    };
+    if (signal == null ? void 0 : signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal == null ? void 0 : signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 async function postJson(url, headers, body, signal) {
   const response = await fetch(url, {
     method: "POST",
@@ -400,7 +458,11 @@ async function postJson(url, headers, body, signal) {
   });
   if (!response.ok) {
     const details = await response.text().catch(() => "");
-    throw new Error(`\u8BF7\u6C42\u5931\u8D25\uFF1A${response.status} ${response.statusText}${details ? ` - ${details}` : ""}`);
+    throw new LlmRequestError(
+      `\u8BF7\u6C42\u5931\u8D25\uFF1A${response.status} ${response.statusText}${details ? ` - ${details}` : ""}`,
+      isRetryableHttpStatus(response.status),
+      response.status
+    );
   }
   return response;
 }
@@ -572,12 +634,51 @@ function buildRequestBody(settings, prompt, cleanedText, mode, stream) {
   }
   return requestBody;
 }
+async function requestCompletionTextWithRetry(settings, url, headers, prompt, cleanedText, mode, stream, progress) {
+  var _a, _b;
+  let useStreaming = stream;
+  for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await postJson(
+        url,
+        headers,
+        buildRequestBody(settings, prompt, cleanedText, mode, useStreaming),
+        progress.signal
+      );
+      const raw = useStreaming ? await readStreamResponse(response, progress.onDelta) : await readJsonResponse(response);
+      if (raw.trim() || !useStreaming || attempt >= LLM_MAX_ATTEMPTS) {
+        return raw;
+      }
+      const delayMs = getRetryDelay(attempt);
+      useStreaming = false;
+      (_a = progress.onRetry) == null ? void 0 : _a.call(progress, {
+        nextAttempt: attempt + 1,
+        maxAttempts: LLM_MAX_ATTEMPTS,
+        reason: "\u6D41\u5F0F\u54CD\u5E94\u4E3A\u7A7A\uFF0C\u5207\u6362\u4E3A\u975E\u6D41\u5F0F\u8BF7\u6C42",
+        delayMs
+      });
+      await waitForRetry(delayMs, progress.signal);
+    } catch (error) {
+      if (!isRetryableLlmError(error, progress.signal) || attempt >= LLM_MAX_ATTEMPTS) {
+        throw error;
+      }
+      const delayMs = getRetryDelay(attempt);
+      (_b = progress.onRetry) == null ? void 0 : _b.call(progress, {
+        nextAttempt: attempt + 1,
+        maxAttempts: LLM_MAX_ATTEMPTS,
+        reason: describeRetryReason(error),
+        delayMs
+      });
+      await waitForRetry(delayMs, progress.signal);
+    }
+  }
+  return "";
+}
 function renderCards(cards) {
   return cards.map((card) => `<!-- CARD -->
 ${card.trim()}`).join("\n\n");
 }
 async function generateFlashcardsWithProgress(text, settings, mode, progress = {}) {
-  var _a, _b;
   const cleanedText = stripExistingCards(text).replace(/<!--.*?-->/gs, "").trim();
   const prompt = buildPrompt(
     mode,
@@ -587,26 +688,16 @@ async function generateFlashcardsWithProgress(text, settings, mode, progress = {
   );
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const response = await postJson(
+  const raw = await requestCompletionTextWithRetry(
+    settings,
     url,
     headers,
-    buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming),
-    progress.signal
+    prompt,
+    cleanedText,
+    mode,
+    settings.streaming,
+    progress
   );
-  let raw = settings.streaming ? await readStreamResponse(response, progress.onDelta) : await readJsonResponse(response);
-  if (!raw.trim() && settings.streaming) {
-    (_a = progress.onRetry) == null ? void 0 : _a.call(progress);
-    const retryResponse = await postJson(
-      url,
-      headers,
-      buildRequestBody(settings, prompt, cleanedText, mode, false),
-      progress.signal
-    );
-    raw = await readJsonResponse(retryResponse);
-    if (raw.trim()) {
-      (_b = progress.onDelta) == null ? void 0 : _b.call(progress, raw);
-    }
-  }
   const parsed = parseCards(raw);
   const cards = parsed.length ? improveCardQuality(parsed, cleanedText, mode) : [buildFallbackCard(cleanedText, mode)];
   return { cards, raw };
@@ -616,13 +707,16 @@ async function generateTwoSidedKnowledgeCard(text, settings, progress = {}) {
   const prompt = buildTwoSidedKnowledgePrompt(settings.additionalPrompt || "");
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const response = await postJson(
+  const raw = await requestCompletionTextWithRetry(
+    settings,
     url,
     headers,
-    buildRequestBody(settings, prompt, normalizeSourceText(cleanedText), "knowledge", false),
-    progress.signal
+    prompt,
+    normalizeSourceText(cleanedText),
+    "knowledge",
+    false,
+    progress
   );
-  const raw = await readJsonResponse(response);
   const front = cleanupSingleLine(raw);
   if (!front || isLowQualityQuestionText(front, cleanedText)) {
     return buildTwoSidedKnowledgeFallback(cleanedText);
@@ -2026,9 +2120,9 @@ var FlashcardsLLMPlugin = class extends import_obsidian4.Plugin {
         onDelta: (delta) => {
           preview.appendText(delta);
         },
-        onRetry: () => {
+        onRetry: (info) => {
           preview.setText("");
-          preview.setStatus("\u6D41\u5F0F\u54CD\u5E94\u4E3A\u7A7A\uFF0C\u6B63\u5728\u81EA\u52A8\u5207\u6362\u4E3A\u975E\u6D41\u5F0F\u8BF7\u6C42\u91CD\u8BD5...");
+          preview.setStatus(`${info.reason}\uFF0C${Math.ceil(info.delayMs / 1e3)} \u79D2\u540E\u8FDB\u884C\u7B2C ${info.nextAttempt}/${info.maxAttempts} \u6B21\u8BF7\u6C42...`);
         }
       });
       preview.setText(renderCards(result.cards));

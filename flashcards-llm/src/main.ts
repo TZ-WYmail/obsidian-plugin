@@ -660,9 +660,9 @@ export default class FlashcardsLLMPlugin extends Plugin {
         onDelta: (delta) => {
           preview.appendText(delta);
         },
-        onRetry: () => {
+        onRetry: (info) => {
           preview.setText("");
-          preview.setStatus("流式响应为空，正在自动切换为非流式请求重试...");
+          preview.setStatus(`${info.reason}，${Math.ceil(info.delayMs / 1000)} 秒后进行第 ${info.nextAttempt}/${info.maxAttempts} 次请求...`);
         }
       });
 
