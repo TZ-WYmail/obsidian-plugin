@@ -1,6 +1,7 @@
-import { App, MarkdownView, PluginSettingTab, Setting } from "obsidian";
+import { App, MarkdownView, Notice, PluginSettingTab, Setting } from "obsidian";
+import { createAnkiClient } from "./anki";
 import { availableReasoningModels } from "./models";
-import FlashcardsLLMPlugin from "./main";
+import type FlashcardsLLMPlugin from "./main";
 
 // 这些旧字段仍保留，用于兼容上游配置和旧版数据。
 export interface FlashcardsSettings {
@@ -22,10 +23,26 @@ export interface FlashcardsSettings {
   hideInPreview: boolean;
   tag: string;
   outputMode: string;
+  ankiConnectUrl: string;
+  ankiApiKey: string;
+  ankiDeck: string;
+  ankiTags: string;
+  autoImportToAnki: boolean;
+  createMissingDeck: boolean;
+  ankiBasicModel: string;
+  ankiBasicFrontField: string;
+  ankiBasicBackField: string;
+  ankiClozeModel: string;
+  ankiClozeTextField: string;
+  ankiClozeExtraField: string;
 }
 
 export class FlashcardsSettingsTab extends PluginSettingTab {
   plugin: FlashcardsLLMPlugin;
+  private deckNames: string[] = [];
+  private deckStatus = "";
+  private hasRequestedDecks = false;
+  private loadingDecks = false;
 
   constructor(app: App, plugin: FlashcardsLLMPlugin) {
     super(app, plugin);
@@ -232,6 +249,8 @@ export class FlashcardsSettingsTab extends PluginSettingTab {
           })
       );
 
+    this.renderAnkiSettings(containerEl);
+
     containerEl.createEl("h3", { text: "兼容旧版字段" });
 
     new Setting(containerEl)
@@ -290,5 +309,271 @@ export class FlashcardsSettingsTab extends PluginSettingTab {
             }
           })
       );
+  }
+
+  private renderAnkiSettings(containerEl: HTMLElement) {
+    containerEl.createEl("h3", { text: "Anki 直连同步" });
+
+    if (!this.hasRequestedDecks) {
+      this.hasRequestedDecks = true;
+      void this.refreshDeckNames(false);
+    }
+
+    new Setting(containerEl)
+      .setName("AnkiConnect 地址")
+      .setDesc("默认使用本机 AnkiConnect 服务；如果没有特殊改动，保持 127.0.0.1:8765 即可")
+      .addText((text) =>
+        text
+          .setPlaceholder("http://127.0.0.1:8765")
+          .setValue(this.plugin.settings.ankiConnectUrl)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiConnectUrl = value.trim() || "http://127.0.0.1:8765";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("AnkiConnect API Key")
+      .setDesc("如果你在 AnkiConnect 配置里启用了 apiKey，在这里填写；未启用时留空")
+      .addText((text) =>
+        text
+          .setPlaceholder("未启用时留空")
+          .setValue(this.plugin.settings.ankiApiKey)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiApiKey = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
+    const deckSetting = new Setting(containerEl)
+      .setName("目标牌组")
+      .setDesc("插件生成或批量导入的卡片会写入这个 Anki 牌组；可点击刷新牌组从 Anki 自动读取");
+
+    if (this.deckNames.length) {
+      const options: Record<string, string> = {};
+      const currentDeck = this.plugin.settings.ankiDeck || "系统默认";
+      if (!this.deckNames.includes(currentDeck)) {
+        options[currentDeck] = `${currentDeck}（当前设置，Anki 中未读取到）`;
+      }
+      for (const deck of this.deckNames) {
+        options[deck] = deck;
+      }
+      deckSetting.addDropdown((dropdown) =>
+        dropdown
+          .addOptions(options)
+          .setValue(currentDeck)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiDeck = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    } else {
+      deckSetting.addText((text) =>
+        text
+          .setPlaceholder("系统默认")
+          .setValue(this.plugin.settings.ankiDeck)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiDeck = value.trim() || "系统默认";
+            await this.plugin.saveSettings();
+          })
+      );
+    }
+
+    new Setting(containerEl)
+      .setName("连接与牌组")
+      .setDesc(this.deckStatus || "测试连接会读取 AnkiConnect 版本和当前牌组列表")
+      .addButton((btn) =>
+        btn
+          .setButtonText(this.loadingDecks ? "读取中..." : "刷新牌组")
+          .setDisabled(this.loadingDecks)
+          .onClick(async () => {
+            await this.refreshDeckNames(true);
+          })
+      )
+      .addButton((btn) =>
+        btn
+          .setButtonText("测试连接")
+          .setCta()
+          .onClick(async () => {
+            await this.testAnkiConnection();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("自动导入到 Anki")
+      .setDesc("开启后，预览确认或批量生成完成时会先保存 Markdown 卡片文件，再通过 AnkiConnect 导入 Anki")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoImportToAnki)
+          .onChange(async (enabled) => {
+            this.plugin.settings.autoImportToAnki = enabled;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("缺失牌组自动创建")
+      .setDesc("开启后，如果目标牌组不存在，会在导入前由 AnkiConnect 自动创建")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.createMissingDeck)
+          .onChange(async (enabled) => {
+            this.plugin.settings.createMissingDeck = enabled;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Anki 标签")
+      .setDesc("导入 Anki 时附加的标签，多个标签可用空格或英文逗号分隔")
+      .addText((text) =>
+        text
+          .setPlaceholder("Obsidian_to_Anki flashcards_llm")
+          .setValue(this.plugin.settings.ankiTags)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiTags = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    containerEl.createEl("h4", { text: "Anki 模板字段映射" });
+
+    new Setting(containerEl)
+      .setName("问答模板")
+      .setDesc("普通问答卡使用的 Anki 笔记类型，默认 Basic")
+      .addText((text) =>
+        text
+          .setPlaceholder("Basic")
+          .setValue(this.plugin.settings.ankiBasicModel)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiBasicModel = value.trim() || "Basic";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("问答字段")
+      .setDesc("依次填写正面字段和背面字段；默认 Front / Back")
+      .addText((text) =>
+        text
+          .setPlaceholder("Front")
+          .setValue(this.plugin.settings.ankiBasicFrontField)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiBasicFrontField = value.trim() || "Front";
+            await this.plugin.saveSettings();
+          })
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("Back")
+          .setValue(this.plugin.settings.ankiBasicBackField)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiBasicBackField = value.trim() || "Back";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("填空模板")
+      .setDesc("Cloze 卡使用的 Anki 笔记类型；中文 Anki 通常是“填空题”")
+      .addText((text) =>
+        text
+          .setPlaceholder("填空题")
+          .setValue(this.plugin.settings.ankiClozeModel)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiClozeModel = value.trim() || "填空题";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("填空字段")
+      .setDesc("依次填写正文 Cloze 字段和背面额外字段；中文 Anki 通常是 文字 / 背面额外")
+      .addText((text) =>
+        text
+          .setPlaceholder("文字")
+          .setValue(this.plugin.settings.ankiClozeTextField)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiClozeTextField = value.trim() || "文字";
+            await this.plugin.saveSettings();
+          })
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder("背面额外")
+          .setValue(this.plugin.settings.ankiClozeExtraField)
+          .onChange(async (value) => {
+            this.plugin.settings.ankiClozeExtraField = value.trim() || "背面额外";
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("批量操作")
+      .setDesc("基于当前打开的笔记执行；批量生成会读取本插件划出的重点并自动去重")
+      .addButton((btn) =>
+        btn.setButtonText("批量问答").onClick(() => {
+          void this.plugin.runBatchGenerateFromActiveView("qa");
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("批量知识点").onClick(() => {
+          void this.plugin.runBatchGenerateFromActiveView("knowledge");
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("导入当前卡片文件夹").setCta().onClick(() => {
+          void this.plugin.importCurrentNoteCardsToAnki();
+        })
+      );
+  }
+
+  private async refreshDeckNames(showNotice: boolean) {
+    this.loadingDecks = true;
+    try {
+      const decks = await createAnkiClient(this.plugin.settings).deckNames();
+      this.deckNames = decks.sort((a, b) => a.localeCompare(b));
+      this.deckStatus = `已读取 ${decks.length} 个牌组`;
+      if (!this.plugin.settings.ankiDeck && this.deckNames.length) {
+        this.plugin.settings.ankiDeck = this.deckNames[0];
+        await this.plugin.saveSettings();
+      }
+      if (showNotice) {
+        new Notice(`已读取 ${decks.length} 个 Anki 牌组`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.deckStatus = `读取牌组失败：${message}`;
+      if (showNotice) {
+        new Notice("读取 Anki 牌组失败，请确认 Anki 已启动并启用 AnkiConnect");
+      }
+    } finally {
+      this.loadingDecks = false;
+      this.display();
+    }
+  }
+
+  private async testAnkiConnection() {
+    try {
+      const client = createAnkiClient(this.plugin.settings);
+      const [version, decks, models] = await Promise.all([
+        client.version(),
+        client.deckNames(),
+        client.modelNames()
+      ]);
+      this.deckNames = decks.sort((a, b) => a.localeCompare(b));
+      this.deckStatus = `连接正常：AnkiConnect v${version}，${decks.length} 个牌组，${models.length} 个模板`;
+      if (!this.plugin.settings.ankiDeck && this.deckNames.length) {
+        this.plugin.settings.ankiDeck = this.deckNames[0];
+        await this.plugin.saveSettings();
+      }
+      new Notice(this.deckStatus);
+      this.display();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.deckStatus = `连接失败：${message}`;
+      new Notice(`Anki 连接失败：${message}`);
+      this.display();
+    }
   }
 }

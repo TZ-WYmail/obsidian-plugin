@@ -9,6 +9,13 @@ import {
 } from "./flashcards";
 import { GenerateModeModal, PreviewModal } from "./components";
 import { FlashcardsSettings, FlashcardsSettingsTab } from "./settings";
+import {
+  buildAnkiNotes,
+  createAnkiClient,
+  parseGeneratedCards,
+  summarizeAddNotesResult
+} from "./anki";
+import type { ImportSummary } from "./anki";
 
 interface MarkedKeyPoint {
   markerId: string;
@@ -38,7 +45,19 @@ const DEFAULT_SETTINGS: FlashcardsSettings = {
   streaming: true,
   hideInPreview: true,
   tag: "#flashcards",
-  outputMode: "obsidian_to_anki"
+  outputMode: "obsidian_to_anki",
+  ankiConnectUrl: "http://127.0.0.1:8765",
+  ankiApiKey: "",
+  ankiDeck: "系统默认",
+  ankiTags: "Obsidian_to_Anki flashcards_llm",
+  autoImportToAnki: true,
+  createMissingDeck: true,
+  ankiBasicModel: "Basic",
+  ankiBasicFrontField: "Front",
+  ankiBasicBackField: "Back",
+  ankiClozeModel: "填空题",
+  ankiClozeTextField: "文字",
+  ankiClozeExtraField: "背面额外"
 };
 
 export default class FlashcardsLLMPlugin extends Plugin {
@@ -99,6 +118,22 @@ export default class FlashcardsLLMPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "import-current-note-card-folder-to-anki",
+      name: "导入当前笔记卡片文件夹到 Anki",
+      callback: async () => {
+        await this.importCurrentNoteCardsToAnki();
+      }
+    });
+
+    this.addCommand({
+      id: "test-anki-connect",
+      name: "测试 AnkiConnect 连接",
+      callback: async () => {
+        await this.testAnkiConnection();
+      }
+    });
+
     this.addSettingTab(new FlashcardsSettingsTab(this.app, this));
 
     this.registerDomEvent(document, "selectionchange", () => {
@@ -113,6 +148,40 @@ export default class FlashcardsLLMPlugin extends Plugin {
     this.registerDomEvent(window, "scroll", () => {
       this.handleSelectionChange();
     }, true);
+  }
+
+  async testAnkiConnection(): Promise<void> {
+    try {
+      const client = createAnkiClient(this.settings);
+      const [version, decks, models] = await Promise.all([
+        client.version(),
+        client.deckNames(),
+        client.modelNames()
+      ]);
+      new Notice(`Anki 连接正常：AnkiConnect v${version}，${decks.length} 个牌组，${models.length} 个模板`);
+    } catch (error) {
+      console.error("测试 AnkiConnect 连接失败：", error);
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`Anki 连接失败：${message}`);
+    }
+  }
+
+  async runBatchGenerateFromActiveView(mode: CardMode): Promise<void> {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || !(view.file instanceof TFile)) {
+      new Notice("请先打开一个 Markdown 笔记再执行批量生成");
+      return;
+    }
+    await this.batchGenerateKeyPointCards(view.editor, view, mode);
+  }
+
+  async importCurrentNoteCardsToAnki(): Promise<ImportSummary | null> {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || !(view.file instanceof TFile)) {
+      new Notice("请先打开一个 Markdown 笔记再导入卡片文件夹");
+      return null;
+    }
+    return this.importCardFolderToAnki(view.file);
   }
 
   private getSourceText(editor: Editor): string {
@@ -457,11 +526,13 @@ export default class FlashcardsLLMPlugin extends Plugin {
     new Notice(`找到 ${keyPoints.length} 段重点，本次将生成 ${pending.length} 张新卡片`);
     let successCount = 0;
     let failCount = 0;
+    const generatedCards: string[] = [];
 
     for (const keyPoint of pending) {
       try {
         const card = await this.generateCardForKeyPoint(keyPoint, effectiveConfig, mode);
         await this.saveKeyPointCardFile(file, card, mode, keyPoint);
+        generatedCards.push(card);
         successCount += 1;
       } catch (error) {
         failCount += 1;
@@ -471,7 +542,9 @@ export default class FlashcardsLLMPlugin extends Plugin {
 
     if (successCount > 0) {
       new Notice(`批量生成完成：新增 ${successCount} 张，失败 ${failCount} 张，已跳过重复重点`);
-      await this.trySyncToAnki();
+      if (this.settings.autoImportToAnki) {
+        await this.importCardsTextToAnki(renderCards(generatedCards), file);
+      }
       return;
     }
 
@@ -552,7 +625,11 @@ export default class FlashcardsLLMPlugin extends Plugin {
     try {
       const savedPath = await this.saveCardsToSiblingFolder(file, text, mode);
       new Notice(`卡片已保存到 ${savedPath}`);
-      await this.trySyncToAnki();
+      if (this.settings.autoImportToAnki) {
+        await this.importCardsTextToAnki(text, file);
+      } else {
+        new Notice("已关闭自动导入，可稍后使用“导入当前笔记卡片文件夹到 Anki”");
+      }
     } catch (error) {
       console.error("保存卡片或同步 Anki 失败：", error);
       new Notice("保存卡片或同步 Anki 失败，请查看插件控制台详情");
@@ -694,38 +771,56 @@ export default class FlashcardsLLMPlugin extends Plugin {
     ].join("");
   }
 
-  private async trySyncToAnki() {
-    const commandIds = [
-      "obsidian-to-anki-plugin:anki-scan-vault",
-      "obsidian-to-anki:anki-scan-vault"
-    ];
-    const commands = (this.app as unknown as {
-      commands?: {
-        executeCommandById?: (commandId: string) => unknown;
-      };
-    }).commands;
-
-    if (!commands?.executeCommandById) {
-      new Notice("已保存卡片，但当前 Obsidian 无法直接调用同步命令，请手动运行 Export to Anki 扫描");
-      return;
+  private async importCardFolderToAnki(file: TFile): Promise<ImportSummary | null> {
+    const folderPath = this.getCardFolderPath(file);
+    const folder = this.app.vault.getFolderByPath(folderPath);
+    if (!folder) {
+      new Notice(`没有找到卡片文件夹：${folderPath}`);
+      return null;
     }
 
-    for (const commandId of commandIds) {
-      try {
-        const result = commands.executeCommandById(commandId);
-        if (result instanceof Promise) {
-          await result;
-        }
-        if (result !== false) {
-          new Notice("已尝试调用 Export to Anki 同步，请确认 Anki 已打开并启用 AnkiConnect");
-          return;
-        }
-      } catch {
-        continue;
+    const files = this.getMarkdownFilesInFolder(folder)
+      .sort((a, b) => a.path.localeCompare(b.path));
+    if (!files.length) {
+      new Notice(`卡片文件夹为空：${folderPath}`);
+      return null;
+    }
+
+    const contents: string[] = [];
+    for (const cardFile of files) {
+      contents.push(await this.app.vault.cachedRead(cardFile));
+    }
+
+    return this.importCardsTextToAnki(contents.join("\n\n"), file);
+  }
+
+  private async importCardsTextToAnki(text: string, sourceFile?: TFile): Promise<ImportSummary | null> {
+    const cards = parseGeneratedCards(text);
+    if (!cards.length) {
+      new Notice("没有解析到可导入 Anki 的卡片，请检查 START/Basic 或 START/Cloze 格式");
+      return null;
+    }
+
+    try {
+      const deckName = this.settings.ankiDeck || "系统默认";
+      const client = createAnkiClient(this.settings);
+      if (this.settings.createMissingDeck) {
+        await client.createDeck(deckName);
       }
-    }
 
-    new Notice("已保存卡片，但未找到 Export to Anki 同步命令，请手动运行 Scan Vault");
+      const notes = buildAnkiNotes(cards, this.settings, sourceFile);
+      const result = await client.addNotes(notes);
+      const summary = summarizeAddNotesResult(result, notes.length);
+      new Notice(
+        `Anki 导入完成：解析 ${summary.total} 张，新增 ${summary.added} 张，重复/跳过 ${summary.duplicateOrSkipped} 张`
+      );
+      return summary;
+    } catch (error) {
+      console.error("Anki 直连导入失败：", error);
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`Anki 直连导入失败：${message}`);
+      return null;
+    }
   }
 
   onunload() {}

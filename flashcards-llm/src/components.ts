@@ -151,7 +151,7 @@ export class PreviewModal extends Modal {
     contentEl.addClass("flashcards-llm-preview-modal");
     contentEl.createEl("h2", { text: "预览并编辑卡片" });
     contentEl.createEl("p", {
-      text: "确认后会保存到当前笔记同目录的「笔记名-card」文件夹，并尝试调用 Export to Anki 同步；不会修改当前笔记正文。"
+      text: "确认后会保存到当前笔记同目录的「笔记名-card」文件夹，并通过 AnkiConnect 直接导入 Anki；不会修改当前笔记正文。"
     });
     this.statusEl = contentEl.createEl("p", {
       cls: "flashcards-llm-preview-status",
