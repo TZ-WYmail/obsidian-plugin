@@ -1,6 +1,6 @@
-import { Editor, MarkdownView, Notice, Plugin } from "obsidian";
+import { Editor, MarkdownView, Notice, normalizePath, Plugin, TFile } from "obsidian";
 import { generateFlashcards, CardMode } from "./flashcards";
-import { GenerateModeModal, PreviewModal, InsertMode } from "./components";
+import { GenerateModeModal, PreviewModal } from "./components";
 import { FlashcardsSettings, FlashcardsSettingsTab } from "./settings";
 
 const DEFAULT_SETTINGS: FlashcardsSettings = {
@@ -149,18 +149,19 @@ export default class FlashcardsLLMPlugin extends Plugin {
       return;
     }
     this.hideFloatingBar();
-    await this.generateAndPreview(editor, this.settings, mode, this.getSourceText(editor));
+    await this.generateAndPreview(editor, view, this.settings, mode, this.getSourceText(editor));
   }
 
   private openGenerationFlow(editor: Editor, view: MarkdownView, mode: CardMode) {
     new GenerateModeModal(this.app, this, async ({ configuration, mode: selectedMode }) => {
       const sourceText = this.getSourceText(editor);
-      await this.generateAndPreview(editor, configuration, selectedMode, sourceText);
+      await this.generateAndPreview(editor, view, configuration, selectedMode, sourceText);
     }, mode).open();
   }
 
   private async generateAndPreview(
     editor: Editor,
+    view: MarkdownView,
     configuration: FlashcardsSettings,
     mode: CardMode,
     sourceText: string
@@ -192,8 +193,8 @@ export default class FlashcardsLLMPlugin extends Plugin {
         maxTokens
       };
       const cards = await generateFlashcards(sourceText, effectiveConfig, mode);
-      const preview = new PreviewModal(this.app, cards, editor.somethingSelected(), async (result) => {
-        this.insertCards(editor, result.text, result.insertMode);
+      const preview = new PreviewModal(this.app, cards, async (result) => {
+        await this.saveCardsAndSync(view, result.text, mode);
       });
       preview.open();
     } catch (error) {
@@ -202,18 +203,123 @@ export default class FlashcardsLLMPlugin extends Plugin {
     }
   }
 
-  private insertCards(editor: Editor, text: string, insertMode: InsertMode) {
+  private async saveCardsAndSync(view: MarkdownView, text: string, mode: CardMode) {
     if (!text.trim()) {
-      new Notice("没有可插入的卡片");
+      new Notice("没有可保存的卡片");
       return;
     }
-    if (insertMode === "replace-selection" && editor.somethingSelected()) {
-      editor.replaceSelection(`\n\n${text}\n`);
-    } else {
-      editor.setCursor(editor.lastLine());
-      editor.replaceRange(`\n\n${text}\n`, editor.getCursor());
+    const file = view.file;
+    if (!(file instanceof TFile)) {
+      new Notice("没有找到当前笔记文件，无法创建卡片文件夹");
+      return;
     }
-    new Notice("卡片已插入");
+
+    try {
+      const savedPath = await this.saveCardsToSiblingFolder(file, text, mode);
+      new Notice(`卡片已保存到 ${savedPath}`);
+      await this.trySyncToAnki();
+    } catch (error) {
+      console.error("保存卡片或同步 Anki 失败：", error);
+      new Notice("保存卡片或同步 Anki 失败，请查看插件控制台详情");
+    }
+  }
+
+  private async saveCardsToSiblingFolder(file: TFile, text: string, mode: CardMode): Promise<string> {
+    const parentPath = file.parent?.path ?? "";
+    const folderName = `${file.basename}-card`;
+    const folderPath = normalizePath(parentPath ? `${parentPath}/${folderName}` : folderName);
+    const existingFolder = this.app.vault.getFolderByPath(folderPath);
+    const existingAbstractFile = this.app.vault.getAbstractFileByPath(folderPath);
+
+    if (!existingFolder) {
+      if (existingAbstractFile) {
+        throw new Error(`同名路径已存在但不是文件夹：${folderPath}`);
+      }
+      await this.app.vault.createFolder(folderPath);
+    }
+
+    const timestamp = this.formatTimestamp(new Date());
+    const modeLabel = mode === "qa" ? "问答卡" : "知识点卡";
+    const cardPath = await this.getUniqueCardPath(folderPath, `${file.basename}-card-${timestamp}.md`);
+    const content = [
+      "---",
+      `source: "[[${file.basename}]]"`,
+      `source_path: "${file.path}"`,
+      `created: "${new Date().toISOString()}"`,
+      `mode: "${mode}"`,
+      "generator: \"闪卡 LLM（自改中文版）\"",
+      "---",
+      "",
+      `# ${file.basename} - ${modeLabel}`,
+      "",
+      text.trim(),
+      ""
+    ].join("\n");
+
+    await this.app.vault.create(cardPath, content);
+    return cardPath;
+  }
+
+  private async getUniqueCardPath(folderPath: string, fileName: string): Promise<string> {
+    const extensionIndex = fileName.lastIndexOf(".");
+    const stem = extensionIndex >= 0 ? fileName.slice(0, extensionIndex) : fileName;
+    const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : "";
+    let candidate = normalizePath(`${folderPath}/${fileName}`);
+    let index = 2;
+
+    while (this.app.vault.getAbstractFileByPath(candidate)) {
+      candidate = normalizePath(`${folderPath}/${stem}-${index}${extension}`);
+      index += 1;
+    }
+
+    return candidate;
+  }
+
+  private formatTimestamp(date: Date): string {
+    const pad = (value: number) => value.toString().padStart(2, "0");
+    return [
+      date.getFullYear(),
+      pad(date.getMonth() + 1),
+      pad(date.getDate())
+    ].join("") + "-" + [
+      pad(date.getHours()),
+      pad(date.getMinutes()),
+      pad(date.getSeconds())
+    ].join("");
+  }
+
+  private async trySyncToAnki() {
+    const commandIds = [
+      "obsidian-to-anki-plugin:anki-scan-vault",
+      "obsidian-to-anki:anki-scan-vault"
+    ];
+    const commands = (this.app as unknown as {
+      commands?: {
+        executeCommandById?: (commandId: string) => unknown;
+      };
+    }).commands;
+
+    if (!commands?.executeCommandById) {
+      new Notice("已保存卡片，但当前 Obsidian 无法直接调用同步命令，请手动运行 Export to Anki 扫描");
+      return;
+    }
+
+    for (const commandId of commandIds) {
+      try {
+        const result = commands.executeCommandById(commandId);
+        if (result instanceof Promise) {
+          await result;
+        }
+        if (result !== false) {
+          new Notice("已尝试调用 Export to Anki 同步，请确认 Anki 已打开并启用 AnkiConnect");
+          return;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    new Notice("已保存卡片，但未找到 Export to Anki 同步命令，请手动运行 Scan Vault");
   }
 
   onunload() {}

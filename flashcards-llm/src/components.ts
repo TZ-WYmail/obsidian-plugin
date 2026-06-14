@@ -9,11 +9,8 @@ export interface GenerationRequest {
   mode: CardMode;
 }
 
-export type InsertMode = "replace-selection" | "append";
-
 export interface PreviewResult {
   text: string;
-  insertMode: InsertMode;
 }
 
 export class GenerateModeModal extends Modal {
@@ -122,14 +119,12 @@ export class GenerateModeModal extends Modal {
 
 export class PreviewModal extends Modal {
   private textValue: string;
-  private insertMode: InsertMode;
   private readonly onSubmit: (result: PreviewResult) => void;
   private textArea?: TextAreaComponent;
 
-  constructor(app: App, initialCards: string[], hasSelection: boolean, onSubmit: (result: PreviewResult) => void) {
+  constructor(app: App, initialCards: string[], onSubmit: (result: PreviewResult) => void) {
     super(app);
     this.textValue = renderCards(initialCards);
-    this.insertMode = hasSelection ? "replace-selection" : "append";
     this.onSubmit = onSubmit;
   }
 
@@ -138,21 +133,9 @@ export class PreviewModal extends Modal {
     contentEl.empty();
     contentEl.addClass("flashcards-llm-preview-modal");
     contentEl.createEl("h2", { text: "预览并编辑卡片" });
-
-    new Setting(contentEl)
-      .setName("写回方式")
-      .setDesc("选择替换当前选中文本，或追加到当前笔记末尾")
-      .addDropdown((dropdown) =>
-        dropdown
-          .addOptions({
-            "replace-selection": "替换选中文本",
-            append: "追加到笔记末尾"
-          })
-          .setValue(this.insertMode)
-          .onChange((value: InsertMode) => {
-            this.insertMode = value;
-          })
-      );
+    contentEl.createEl("p", {
+      text: "确认后会保存到当前笔记同目录的「笔记名-card」文件夹，并尝试调用 Export to Anki 同步；不会修改当前笔记正文。"
+    });
 
     this.textArea = new TextAreaComponent(contentEl);
     this.textArea.setValue(this.textValue);
@@ -164,11 +147,10 @@ export class PreviewModal extends Modal {
 
     new Setting(contentEl)
       .addButton((btn) =>
-        btn.setButtonText("插入卡片").setCta().onClick(() => {
+        btn.setButtonText("确认生成并同步").setCta().onClick(() => {
           this.close();
           this.onSubmit({
-            text: this.textValue.trim(),
-            insertMode: this.insertMode
+            text: this.textValue.trim()
           });
         })
       )

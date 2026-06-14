@@ -70,7 +70,8 @@ function buildModeInstructions(mode) {
       "Q: ...",
       "A: ...",
       "END",
-      "\u6BCF\u4E2A\u95EE\u9898\u53EA\u8003\u5BDF\u4E00\u4E2A\u8BB0\u5FC6\u70B9\uFF0C\u95EE\u9898\u548C\u7B54\u6848\u90FD\u4F7F\u7528\u4E2D\u6587\uFF0C\u7B54\u6848\u4FDD\u6301\u7B80\u6D01\u51C6\u786E\u3002"
+      "\u6BCF\u4E2A\u95EE\u9898\u53EA\u8003\u5BDF\u4E00\u4E2A\u8BB0\u5FC6\u70B9\uFF0C\u95EE\u9898\u548C\u7B54\u6848\u90FD\u4F7F\u7528\u4E2D\u6587\uFF0C\u7B54\u6848\u4FDD\u6301\u7B80\u6D01\u51C6\u786E\u3002",
+      "\u5373\u4F7F\u6750\u6599\u5F88\u77ED\uFF0C\u4E5F\u5FC5\u987B\u81F3\u5C11\u751F\u6210 1 \u5F20\u5361\u7247\uFF0C\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u5185\u5BB9\u3002"
     ];
   }
   return [
@@ -87,7 +88,8 @@ function buildModeInstructions(mode) {
     "Q: ...",
     "A: ...",
     "END",
-    "\u77E5\u8BC6\u70B9\u8981\u539F\u5B50\u5316\uFF0C\u907F\u514D\u628A\u591A\u4E2A\u65E0\u5173\u4E8B\u5B9E\u585E\u8FDB\u540C\u4E00\u5F20\u5361\u3002"
+    "\u77E5\u8BC6\u70B9\u8981\u539F\u5B50\u5316\uFF0C\u907F\u514D\u628A\u591A\u4E2A\u65E0\u5173\u4E8B\u5B9E\u585E\u8FDB\u540C\u4E00\u5F20\u5361\u3002",
+    "\u5373\u4F7F\u6750\u6599\u5F88\u77ED\uFF0C\u4E5F\u5FC5\u987B\u81F3\u5C11\u751F\u6210 1 \u5F20\u5361\u7247\uFF0C\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u5185\u5BB9\u3002"
   ];
 }
 function buildPrompt(mode, count, systemPrompt, additionalPrompt) {
@@ -101,6 +103,7 @@ function buildPrompt(mode, count, systemPrompt, additionalPrompt) {
     "\u6BCF\u5F20\u5361\u7247\u90FD\u5FC5\u987B\u4EE5 `<!-- CARD -->` \u5F00\u59CB\u3002",
     "\u4E0D\u8981\u5728\u5361\u7247\u5916\u6DFB\u52A0\u89E3\u91CA\u3001\u6807\u9898\u3001\u9879\u76EE\u7B26\u53F7\u6216\u989D\u5916\u8BF4\u660E\u3002",
     "\u6BCF\u5F20\u5361\u7247\u53EA\u8986\u76D6\u4E00\u4E2A\u72EC\u7ACB\u8BB0\u5FC6\u70B9\uFF0C\u907F\u514D\u91CD\u590D\u3002",
+    "\u5982\u679C\u65E0\u6CD5\u751F\u6210\u5B8C\u7F8E\u5361\u7247\uFF0C\u4E5F\u8981\u8F93\u51FA\u6700\u5408\u7406\u7684\u4E00\u5F20\u5361\u7247\uFF0C\u7EDD\u4E0D\u80FD\u8FD4\u56DE\u7A7A\u767D\u3002",
     ...buildModeInstructions(mode)
   ];
   let prompt = promptParts.join("\n");
@@ -111,8 +114,34 @@ ${additionalPrompt.trim()}`;
   }
   return prompt;
 }
+function stripOuterCodeFence(raw) {
+  return raw.trim().replace(/^```[\w-]*\s*/m, "").replace(/\s*```$/m, "").trim();
+}
 function parseCards(raw) {
-  return raw.split(/<!-- CARD -->/g).map((part) => part.trim()).filter(Boolean).map((card) => card.replace(/^```[\w-]*\n?/m, "").replace(/\n?```$/m, "").trim());
+  const cleaned = stripOuterCodeFence(raw);
+  const parts = cleaned.includes("<!-- CARD -->") ? cleaned.split(/<!-- CARD -->/g) : [cleaned];
+  return parts.map((part) => part.trim()).map(stripOuterCodeFence).filter((card) => card.length > 0);
+}
+function buildFallbackCard(source, mode) {
+  const compactSource = source.replace(/\s+/g, " ").trim().slice(0, 500);
+  if (!compactSource) {
+    throw new Error("\u9009\u4E2D\u6587\u672C\u6216\u9AD8\u4EAE\u5185\u5BB9\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u751F\u6210\u5361\u7247");
+  }
+  if (mode === "knowledge") {
+    return [
+      "START",
+      "Cloze",
+      `{{c1::${compactSource}}}`,
+      "END"
+    ].join("\n");
+  }
+  return [
+    "START",
+    "Basic",
+    "Q: \u8FD9\u6BB5\u5185\u5BB9\u7684\u6838\u5FC3\u77E5\u8BC6\u70B9\u662F\u4EC0\u4E48\uFF1F",
+    `A: ${compactSource}`,
+    "END"
+  ].join("\n");
 }
 async function postJson(url, headers, body) {
   const response = await fetch(url, {
@@ -127,12 +156,13 @@ async function postJson(url, headers, body) {
   return response;
 }
 async function readJsonResponse(response) {
-  var _a, _b, _c, _d, _e, _f;
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i;
   const data = await response.json();
-  return (_f = (_e = (_d = (_c = (_b = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content) == null ? void 0 : _d.trim) == null ? void 0 : _e.call(_d)) != null ? _f : "";
+  const choice = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0];
+  return (_i = (_h = (_g = (_f = (_e = (_d = (_c = (_b = choice == null ? void 0 : choice.message) == null ? void 0 : _b.content) != null ? _c : choice == null ? void 0 : choice.text) != null ? _d : data == null ? void 0 : data.output_text) != null ? _e : data == null ? void 0 : data.response) != null ? _f : "").trim) == null ? void 0 : _h.call(_g)) != null ? _i : "";
 }
 async function readStreamResponse(response) {
-  var _a, _b, _c, _d, _e, _f;
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
   const reader = (_a = response.body) == null ? void 0 : _a.getReader();
   if (!reader) {
     return "";
@@ -156,13 +186,52 @@ async function readStreamResponse(response) {
         continue;
       try {
         const json = JSON.parse(payload);
-        result += (_f = (_e = (_d = (_c = json == null ? void 0 : json.choices) == null ? void 0 : _c[0]) == null ? void 0 : _d.delta) == null ? void 0 : _e.content) != null ? _f : "";
+        const choice = (_c = json == null ? void 0 : json.choices) == null ? void 0 : _c[0];
+        result += (_h = (_g = (_f = (_d = choice == null ? void 0 : choice.delta) == null ? void 0 : _d.content) != null ? _f : (_e = choice == null ? void 0 : choice.message) == null ? void 0 : _e.content) != null ? _g : choice == null ? void 0 : choice.text) != null ? _h : "";
       } catch (e) {
         continue;
       }
     }
   }
+  const leftover = buffer.trim();
+  if (leftover.startsWith("data:")) {
+    const payload = leftover.slice(5).trim();
+    if (payload && payload !== "[DONE]") {
+      try {
+        const json = JSON.parse(payload);
+        const choice = (_i = json == null ? void 0 : json.choices) == null ? void 0 : _i[0];
+        result += (_n = (_m = (_l = (_j = choice == null ? void 0 : choice.delta) == null ? void 0 : _j.content) != null ? _l : (_k = choice == null ? void 0 : choice.message) == null ? void 0 : _k.content) != null ? _m : choice == null ? void 0 : choice.text) != null ? _n : "";
+      } catch (e) {
+      }
+    }
+  } else if (!result.trim() && leftover) {
+    try {
+      const json = JSON.parse(leftover);
+      const choice = (_o = json == null ? void 0 : json.choices) == null ? void 0 : _o[0];
+      result += (_t = (_s = (_r = (_q = (_p = choice == null ? void 0 : choice.message) == null ? void 0 : _p.content) != null ? _q : choice == null ? void 0 : choice.text) != null ? _r : json == null ? void 0 : json.output_text) != null ? _s : json == null ? void 0 : json.response) != null ? _t : "";
+    } catch (e) {
+      result += leftover;
+    }
+  }
   return result.trim();
+}
+function buildRequestBody(settings, prompt, cleanedText, mode, stream) {
+  const requestBody = {
+    model: settings.model,
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: cleanedText }
+    ],
+    stream,
+    temperature: mode === "qa" ? 0.3 : 0.4
+  };
+  if (!settings.model.startsWith("o")) {
+    requestBody.max_tokens = settings.maxTokens;
+  } else {
+    requestBody.max_completion_tokens = settings.maxTokens;
+    requestBody.reasoning_effort = settings.reasoningEffort || "low";
+  }
+  return requestBody;
 }
 function renderCards(cards) {
   return cards.map((card) => `<!-- CARD -->
@@ -178,25 +247,14 @@ async function generateFlashcards(text, settings, mode) {
   );
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const requestBody = {
-    model: settings.model,
-    messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: cleanedText }
-    ],
-    stream: settings.streaming,
-    temperature: mode === "qa" ? 0.3 : 0.4
-  };
-  if (!settings.model.startsWith("o")) {
-    requestBody.max_tokens = settings.maxTokens;
-  } else {
-    requestBody.max_completion_tokens = settings.maxTokens;
-    requestBody.reasoning_effort = settings.reasoningEffort || "low";
+  const response = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming));
+  let raw = settings.streaming ? await readStreamResponse(response) : await readJsonResponse(response);
+  if (!raw.trim() && settings.streaming) {
+    const retryResponse = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, false));
+    raw = await readJsonResponse(retryResponse);
   }
-  const response = await postJson(url, headers, requestBody);
-  const raw = settings.streaming ? await readStreamResponse(response) : await readJsonResponse(response);
   const parsed = parseCards(raw);
-  return parsed.length ? parsed : [raw.trim()].filter(Boolean);
+  return parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
 }
 
 // src/components.ts
@@ -270,10 +328,9 @@ var GenerateModeModal = class extends import_obsidian.Modal {
   }
 };
 var PreviewModal = class extends import_obsidian.Modal {
-  constructor(app, initialCards, hasSelection, onSubmit) {
+  constructor(app, initialCards, onSubmit) {
     super(app);
     this.textValue = renderCards(initialCards);
-    this.insertMode = hasSelection ? "replace-selection" : "append";
     this.onSubmit = onSubmit;
   }
   onOpen() {
@@ -281,14 +338,9 @@ var PreviewModal = class extends import_obsidian.Modal {
     contentEl.empty();
     contentEl.addClass("flashcards-llm-preview-modal");
     contentEl.createEl("h2", { text: "\u9884\u89C8\u5E76\u7F16\u8F91\u5361\u7247" });
-    new import_obsidian.Setting(contentEl).setName("\u5199\u56DE\u65B9\u5F0F").setDesc("\u9009\u62E9\u66FF\u6362\u5F53\u524D\u9009\u4E2D\u6587\u672C\uFF0C\u6216\u8FFD\u52A0\u5230\u5F53\u524D\u7B14\u8BB0\u672B\u5C3E").addDropdown(
-      (dropdown) => dropdown.addOptions({
-        "replace-selection": "\u66FF\u6362\u9009\u4E2D\u6587\u672C",
-        append: "\u8FFD\u52A0\u5230\u7B14\u8BB0\u672B\u5C3E"
-      }).setValue(this.insertMode).onChange((value) => {
-        this.insertMode = value;
-      })
-    );
+    contentEl.createEl("p", {
+      text: "\u786E\u8BA4\u540E\u4F1A\u4FDD\u5B58\u5230\u5F53\u524D\u7B14\u8BB0\u540C\u76EE\u5F55\u7684\u300C\u7B14\u8BB0\u540D-card\u300D\u6587\u4EF6\u5939\uFF0C\u5E76\u5C1D\u8BD5\u8C03\u7528 Export to Anki \u540C\u6B65\uFF1B\u4E0D\u4F1A\u4FEE\u6539\u5F53\u524D\u7B14\u8BB0\u6B63\u6587\u3002"
+    });
     this.textArea = new import_obsidian.TextAreaComponent(contentEl);
     this.textArea.setValue(this.textValue);
     this.textArea.inputEl.addClass("flashcards-llm-preview-textarea");
@@ -297,11 +349,10 @@ var PreviewModal = class extends import_obsidian.Modal {
       this.textValue = value;
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (btn) => btn.setButtonText("\u63D2\u5165\u5361\u7247").setCta().onClick(() => {
+      (btn) => btn.setButtonText("\u786E\u8BA4\u751F\u6210\u5E76\u540C\u6B65").setCta().onClick(() => {
         this.close();
         this.onSubmit({
-          text: this.textValue.trim(),
-          insertMode: this.insertMode
+          text: this.textValue.trim()
         });
       })
     ).addButton(
@@ -586,15 +637,15 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
       return;
     }
     this.hideFloatingBar();
-    await this.generateAndPreview(editor, this.settings, mode, this.getSourceText(editor));
+    await this.generateAndPreview(editor, view, this.settings, mode, this.getSourceText(editor));
   }
   openGenerationFlow(editor, view, mode) {
     new GenerateModeModal(this.app, this, async ({ configuration, mode: selectedMode }) => {
       const sourceText = this.getSourceText(editor);
-      await this.generateAndPreview(editor, configuration, selectedMode, sourceText);
+      await this.generateAndPreview(editor, view, configuration, selectedMode, sourceText);
     }, mode).open();
   }
-  async generateAndPreview(editor, configuration, mode, sourceText) {
+  async generateAndPreview(editor, view, configuration, mode, sourceText) {
     if (!configuration.apiKey) {
       new import_obsidian3.Notice("\u8BF7\u5148\u5728\u63D2\u4EF6\u8BBE\u7F6E\u4E2D\u586B\u5199 API Key");
       return;
@@ -619,8 +670,8 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
         maxTokens
       };
       const cards = await generateFlashcards(sourceText, effectiveConfig, mode);
-      const preview = new PreviewModal(this.app, cards, editor.somethingSelected(), async (result) => {
-        this.insertCards(editor, result.text, result.insertMode);
+      const preview = new PreviewModal(this.app, cards, async (result) => {
+        await this.saveCardsAndSync(view, result.text, mode);
       });
       preview.open();
     } catch (error) {
@@ -628,24 +679,107 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
       new import_obsidian3.Notice("\u751F\u6210\u5361\u7247\u5931\u8D25\uFF0C\u8BF7\u67E5\u770B\u63D2\u4EF6\u63A7\u5236\u53F0\u8BE6\u60C5");
     }
   }
-  insertCards(editor, text, insertMode) {
+  async saveCardsAndSync(view, text, mode) {
     if (!text.trim()) {
-      new import_obsidian3.Notice("\u6CA1\u6709\u53EF\u63D2\u5165\u7684\u5361\u7247");
+      new import_obsidian3.Notice("\u6CA1\u6709\u53EF\u4FDD\u5B58\u7684\u5361\u7247");
       return;
     }
-    if (insertMode === "replace-selection" && editor.somethingSelected()) {
-      editor.replaceSelection(`
-
-${text}
-`);
-    } else {
-      editor.setCursor(editor.lastLine());
-      editor.replaceRange(`
-
-${text}
-`, editor.getCursor());
+    const file = view.file;
+    if (!(file instanceof import_obsidian3.TFile)) {
+      new import_obsidian3.Notice("\u6CA1\u6709\u627E\u5230\u5F53\u524D\u7B14\u8BB0\u6587\u4EF6\uFF0C\u65E0\u6CD5\u521B\u5EFA\u5361\u7247\u6587\u4EF6\u5939");
+      return;
     }
-    new import_obsidian3.Notice("\u5361\u7247\u5DF2\u63D2\u5165");
+    try {
+      const savedPath = await this.saveCardsToSiblingFolder(file, text, mode);
+      new import_obsidian3.Notice(`\u5361\u7247\u5DF2\u4FDD\u5B58\u5230 ${savedPath}`);
+      await this.trySyncToAnki();
+    } catch (error) {
+      console.error("\u4FDD\u5B58\u5361\u7247\u6216\u540C\u6B65 Anki \u5931\u8D25\uFF1A", error);
+      new import_obsidian3.Notice("\u4FDD\u5B58\u5361\u7247\u6216\u540C\u6B65 Anki \u5931\u8D25\uFF0C\u8BF7\u67E5\u770B\u63D2\u4EF6\u63A7\u5236\u53F0\u8BE6\u60C5");
+    }
+  }
+  async saveCardsToSiblingFolder(file, text, mode) {
+    var _a, _b;
+    const parentPath = (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "";
+    const folderName = `${file.basename}-card`;
+    const folderPath = (0, import_obsidian3.normalizePath)(parentPath ? `${parentPath}/${folderName}` : folderName);
+    const existingFolder = this.app.vault.getFolderByPath(folderPath);
+    const existingAbstractFile = this.app.vault.getAbstractFileByPath(folderPath);
+    if (!existingFolder) {
+      if (existingAbstractFile) {
+        throw new Error(`\u540C\u540D\u8DEF\u5F84\u5DF2\u5B58\u5728\u4F46\u4E0D\u662F\u6587\u4EF6\u5939\uFF1A${folderPath}`);
+      }
+      await this.app.vault.createFolder(folderPath);
+    }
+    const timestamp = this.formatTimestamp(new Date());
+    const modeLabel = mode === "qa" ? "\u95EE\u7B54\u5361" : "\u77E5\u8BC6\u70B9\u5361";
+    const cardPath = await this.getUniqueCardPath(folderPath, `${file.basename}-card-${timestamp}.md`);
+    const content = [
+      "---",
+      `source: "[[${file.basename}]]"`,
+      `source_path: "${file.path}"`,
+      `created: "${new Date().toISOString()}"`,
+      `mode: "${mode}"`,
+      'generator: "\u95EA\u5361 LLM\uFF08\u81EA\u6539\u4E2D\u6587\u7248\uFF09"',
+      "---",
+      "",
+      `# ${file.basename} - ${modeLabel}`,
+      "",
+      text.trim(),
+      ""
+    ].join("\n");
+    await this.app.vault.create(cardPath, content);
+    return cardPath;
+  }
+  async getUniqueCardPath(folderPath, fileName) {
+    const extensionIndex = fileName.lastIndexOf(".");
+    const stem = extensionIndex >= 0 ? fileName.slice(0, extensionIndex) : fileName;
+    const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : "";
+    let candidate = (0, import_obsidian3.normalizePath)(`${folderPath}/${fileName}`);
+    let index = 2;
+    while (this.app.vault.getAbstractFileByPath(candidate)) {
+      candidate = (0, import_obsidian3.normalizePath)(`${folderPath}/${stem}-${index}${extension}`);
+      index += 1;
+    }
+    return candidate;
+  }
+  formatTimestamp(date) {
+    const pad = (value) => value.toString().padStart(2, "0");
+    return [
+      date.getFullYear(),
+      pad(date.getMonth() + 1),
+      pad(date.getDate())
+    ].join("") + "-" + [
+      pad(date.getHours()),
+      pad(date.getMinutes()),
+      pad(date.getSeconds())
+    ].join("");
+  }
+  async trySyncToAnki() {
+    const commandIds = [
+      "obsidian-to-anki-plugin:anki-scan-vault",
+      "obsidian-to-anki:anki-scan-vault"
+    ];
+    const commands = this.app.commands;
+    if (!(commands == null ? void 0 : commands.executeCommandById)) {
+      new import_obsidian3.Notice("\u5DF2\u4FDD\u5B58\u5361\u7247\uFF0C\u4F46\u5F53\u524D Obsidian \u65E0\u6CD5\u76F4\u63A5\u8C03\u7528\u540C\u6B65\u547D\u4EE4\uFF0C\u8BF7\u624B\u52A8\u8FD0\u884C Export to Anki \u626B\u63CF");
+      return;
+    }
+    for (const commandId of commandIds) {
+      try {
+        const result = commands.executeCommandById(commandId);
+        if (result instanceof Promise) {
+          await result;
+        }
+        if (result !== false) {
+          new import_obsidian3.Notice("\u5DF2\u5C1D\u8BD5\u8C03\u7528 Export to Anki \u540C\u6B65\uFF0C\u8BF7\u786E\u8BA4 Anki \u5DF2\u6253\u5F00\u5E76\u542F\u7528 AnkiConnect");
+          return;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+    new import_obsidian3.Notice("\u5DF2\u4FDD\u5B58\u5361\u7247\uFF0C\u4F46\u672A\u627E\u5230 Export to Anki \u540C\u6B65\u547D\u4EE4\uFF0C\u8BF7\u624B\u52A8\u8FD0\u884C Scan Vault");
   }
   onunload() {
   }

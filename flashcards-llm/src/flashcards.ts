@@ -46,7 +46,8 @@ function buildModeInstructions(mode: CardMode): string[] {
       "Q: ...",
       "A: ...",
       "END",
-      "每个问题只考察一个记忆点，问题和答案都使用中文，答案保持简洁准确。"
+      "每个问题只考察一个记忆点，问题和答案都使用中文，答案保持简洁准确。",
+      "即使材料很短，也必须至少生成 1 张卡片，不能返回空内容。"
     ];
   }
 
@@ -64,7 +65,8 @@ function buildModeInstructions(mode: CardMode): string[] {
     "Q: ...",
     "A: ...",
     "END",
-    "知识点要原子化，避免把多个无关事实塞进同一张卡。"
+    "知识点要原子化，避免把多个无关事实塞进同一张卡。",
+    "即使材料很短，也必须至少生成 1 张卡片，不能返回空内容。"
   ];
 }
 
@@ -79,6 +81,7 @@ function buildPrompt(mode: CardMode, count: number, systemPrompt: string, additi
     "每张卡片都必须以 `<!-- CARD -->` 开始。",
     "不要在卡片外添加解释、标题、项目符号或额外说明。",
     "每张卡片只覆盖一个独立记忆点，避免重复。",
+    "如果无法生成完美卡片，也要输出最合理的一张卡片，绝不能返回空白。",
     ...buildModeInstructions(mode)
   ];
   let prompt = promptParts.join("\n");
@@ -88,12 +91,49 @@ function buildPrompt(mode: CardMode, count: number, systemPrompt: string, additi
   return prompt;
 }
 
-function parseCards(raw: string): string[] {
+function stripOuterCodeFence(raw: string): string {
   return raw
-    .split(/<!-- CARD -->/g)
+    .trim()
+    .replace(/^```[\w-]*\s*/m, "")
+    .replace(/\s*```$/m, "")
+    .trim();
+}
+
+function parseCards(raw: string): string[] {
+  const cleaned = stripOuterCodeFence(raw);
+  const parts = cleaned.includes("<!-- CARD -->") ? cleaned.split(/<!-- CARD -->/g) : [cleaned];
+  return parts
     .map((part) => part.trim())
-    .filter(Boolean)
-    .map((card) => card.replace(/^```[\w-]*\n?/m, "").replace(/\n?```$/m, "").trim());
+    .map(stripOuterCodeFence)
+    .filter((card) => card.length > 0);
+}
+
+function buildFallbackCard(source: string, mode: CardMode): string {
+  const compactSource = source
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500);
+
+  if (!compactSource) {
+    throw new Error("选中文本或高亮内容为空，无法生成卡片");
+  }
+
+  if (mode === "knowledge") {
+    return [
+      "START",
+      "Cloze",
+      `{{c1::${compactSource}}}`,
+      "END"
+    ].join("\n");
+  }
+
+  return [
+    "START",
+    "Basic",
+    "Q: 这段内容的核心知识点是什么？",
+    `A: ${compactSource}`,
+    "END"
+  ].join("\n");
 }
 
 async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
@@ -111,7 +151,14 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
 
 async function readJsonResponse(response: Response): Promise<string> {
   const data = await response.json();
-  return data?.choices?.[0]?.message?.content?.trim?.() ?? "";
+  const choice = data?.choices?.[0];
+  return (
+    choice?.message?.content ??
+    choice?.text ??
+    data?.output_text ??
+    data?.response ??
+    ""
+  ).trim?.() ?? "";
 }
 
 async function readStreamResponse(response: Response): Promise<string> {
@@ -135,13 +182,60 @@ async function readStreamResponse(response: Response): Promise<string> {
       if (payload === "[DONE]") continue;
       try {
         const json = JSON.parse(payload);
-        result += json?.choices?.[0]?.delta?.content ?? "";
+        const choice = json?.choices?.[0];
+        result += choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? "";
       } catch {
         continue;
       }
     }
   }
+  const leftover = buffer.trim();
+  if (leftover.startsWith("data:")) {
+    const payload = leftover.slice(5).trim();
+    if (payload && payload !== "[DONE]") {
+      try {
+        const json = JSON.parse(payload);
+        const choice = json?.choices?.[0];
+        result += choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? "";
+      } catch {
+        // Ignore malformed stream tail chunks and let the retry/fallback path handle empty output.
+      }
+    }
+  } else if (!result.trim() && leftover) {
+    try {
+      const json = JSON.parse(leftover);
+      const choice = json?.choices?.[0];
+      result += choice?.message?.content ?? choice?.text ?? json?.output_text ?? json?.response ?? "";
+    } catch {
+      result += leftover;
+    }
+  }
   return result.trim();
+}
+
+function buildRequestBody(
+  settings: FlashcardsSettings,
+  prompt: string,
+  cleanedText: string,
+  mode: CardMode,
+  stream: boolean
+): Record<string, unknown> {
+  const requestBody: Record<string, unknown> = {
+    model: settings.model,
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: cleanedText }
+    ],
+    stream,
+    temperature: mode === "qa" ? 0.3 : 0.4
+  };
+  if (!settings.model.startsWith("o")) {
+    requestBody.max_tokens = settings.maxTokens;
+  } else {
+    requestBody.max_completion_tokens = settings.maxTokens;
+    requestBody.reasoning_effort = settings.reasoningEffort || "low";
+  }
+  return requestBody;
 }
 
 export function renderCards(cards: string[]): string {
@@ -162,23 +256,14 @@ export async function generateFlashcards(
   );
   const url = buildUrl(settings.baseUrl || "https://api.openai.com", settings.apiPath || "/v1/chat/completions");
   const headers = buildHeaders(settings);
-  const requestBody: Record<string, unknown> = {
-    model: settings.model,
-    messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: cleanedText }
-    ],
-    stream: settings.streaming,
-    temperature: mode === "qa" ? 0.3 : 0.4
-  };
-  if (!settings.model.startsWith("o")) {
-    requestBody.max_tokens = settings.maxTokens;
-  } else {
-    requestBody.max_completion_tokens = settings.maxTokens;
-    requestBody.reasoning_effort = settings.reasoningEffort || "low";
+  const response = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, settings.streaming));
+  let raw = settings.streaming ? await readStreamResponse(response) : await readJsonResponse(response);
+
+  if (!raw.trim() && settings.streaming) {
+    const retryResponse = await postJson(url, headers, buildRequestBody(settings, prompt, cleanedText, mode, false));
+    raw = await readJsonResponse(retryResponse);
   }
-  const response = await postJson(url, headers, requestBody);
-  const raw = settings.streaming ? await readStreamResponse(response) : await readJsonResponse(response);
+
   const parsed = parseCards(raw);
-  return parsed.length ? parsed : [raw.trim()].filter(Boolean);
+  return parsed.length ? parsed : [buildFallbackCard(cleanedText, mode)];
 }
