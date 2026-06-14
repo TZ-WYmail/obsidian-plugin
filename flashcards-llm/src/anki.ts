@@ -95,6 +95,13 @@ export function createAnkiClient(settings: FlashcardsSettings): AnkiConnectClien
   return new AnkiConnectClient(settings.ankiConnectUrl || "http://127.0.0.1:8765", settings.ankiApiKey || "");
 }
 
+export function resolveAnkiDeckName(settings: FlashcardsSettings, sourceFile?: TFile): string {
+  if ((settings.ankiDeckMode || "source_file") === "source_file" && sourceFile?.basename.trim()) {
+    return sanitizeAnkiDeckName(sourceFile.basename);
+  }
+  return sanitizeAnkiDeckName(settings.ankiDeck || "系统默认");
+}
+
 export function parseGeneratedCards(text: string): ParsedAnkiCard[] {
   const cleaned = text
     .replace(/^---\s*[\s\S]*?\n---\s*/m, "")
@@ -135,7 +142,7 @@ export function parseGeneratedCards(text: string): ParsedAnkiCard[] {
 }
 
 export function buildAnkiNotes(cards: ParsedAnkiCard[], settings: FlashcardsSettings, sourceFile?: TFile): AnkiNote[] {
-  const deckName = settings.ankiDeck || "系统默认";
+  const deckName = resolveAnkiDeckName(settings, sourceFile);
   const tags = buildTags(settings, sourceFile);
 
   return cards.map((card) => {
@@ -206,4 +213,11 @@ function formatAnkiField(text: string): string {
     .replace(/==([\s\S]*?)==/g, "<mark>$1</mark>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\n/g, "<br>");
+}
+
+function sanitizeAnkiDeckName(name: string): string {
+  return name
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "系统默认";
 }

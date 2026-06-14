@@ -674,6 +674,12 @@ var AnkiConnectClient = class {
 function createAnkiClient(settings) {
   return new AnkiConnectClient(settings.ankiConnectUrl || "http://127.0.0.1:8765", settings.ankiApiKey || "");
 }
+function resolveAnkiDeckName(settings, sourceFile) {
+  if ((settings.ankiDeckMode || "source_file") === "source_file" && (sourceFile == null ? void 0 : sourceFile.basename.trim())) {
+    return sanitizeAnkiDeckName(sourceFile.basename);
+  }
+  return sanitizeAnkiDeckName(settings.ankiDeck || "\u7CFB\u7EDF\u9ED8\u8BA4");
+}
 function parseGeneratedCards(text) {
   var _a;
   const cleaned = text.replace(/^---\s*[\s\S]*?\n---\s*/m, "").replace(/^# .*$\n?/gm, "");
@@ -705,7 +711,7 @@ function parseGeneratedCards(text) {
   return cards;
 }
 function buildAnkiNotes(cards, settings, sourceFile) {
-  const deckName = settings.ankiDeck || "\u7CFB\u7EDF\u9ED8\u8BA4";
+  const deckName = resolveAnkiDeckName(settings, sourceFile);
   const tags = buildTags(settings, sourceFile);
   return cards.map((card) => {
     var _a, _b, _c;
@@ -760,6 +766,9 @@ function buildTags(settings, sourceFile) {
 }
 function formatAnkiField(text) {
   return text.trim().replace(/<!-- CARD -->/g, "").replace(/%%[\s\S]*?%%/g, "").replace(/\[\[([^\]|]+)\|([^\]]+)]]/g, "$2").replace(/\[\[([^\]]+)]]/g, "$1").replace(/==([\s\S]*?)==/g, "<mark>$1</mark>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+}
+function sanitizeAnkiDeckName(name) {
+  return name.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim() || "\u7CFB\u7EDF\u9ED8\u8BA4";
 }
 
 // src/settings.ts
@@ -920,29 +929,41 @@ var FlashcardsSettingsTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    const deckSetting = new import_obsidian3.Setting(containerEl).setName("\u76EE\u6807\u724C\u7EC4").setDesc("\u63D2\u4EF6\u751F\u6210\u6216\u6279\u91CF\u5BFC\u5165\u7684\u5361\u7247\u4F1A\u5199\u5165\u8FD9\u4E2A Anki \u724C\u7EC4\uFF1B\u53EF\u70B9\u51FB\u5237\u65B0\u724C\u7EC4\u4ECE Anki \u81EA\u52A8\u8BFB\u53D6");
-    if (this.deckNames.length) {
-      const options = {};
-      const currentDeck = this.plugin.settings.ankiDeck || "\u7CFB\u7EDF\u9ED8\u8BA4";
-      if (!this.deckNames.includes(currentDeck)) {
-        options[currentDeck] = `${currentDeck}\uFF08\u5F53\u524D\u8BBE\u7F6E\uFF0CAnki \u4E2D\u672A\u8BFB\u53D6\u5230\uFF09`;
+    new import_obsidian3.Setting(containerEl).setName("\u724C\u7EC4\u547D\u540D\u65B9\u5F0F").setDesc("\u9ED8\u8BA4\u8DDF\u968F\u5F53\u524D\u6253\u5F00\u7684 Markdown \u6587\u4EF6\u540D\uFF1B\u4F8B\u5982\u6253\u5F00\u201C\u7B97\u6CD5.md\u201D\u65F6\u5BFC\u5165\u5230 Anki \u724C\u7EC4\u201C\u7B97\u6CD5\u201D").addDropdown(
+      (dropdown) => dropdown.addOptions({
+        source_file: "\u8DDF\u968F\u5F53\u524D\u7B14\u8BB0\u540D\uFF08\u63A8\u8350\uFF09",
+        fixed: "\u4F7F\u7528\u56FA\u5B9A\u724C\u7EC4"
+      }).setValue(this.plugin.settings.ankiDeckMode || "source_file").onChange(async (value) => {
+        this.plugin.settings.ankiDeckMode = value;
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+    if ((this.plugin.settings.ankiDeckMode || "source_file") === "fixed") {
+      const deckSetting = new import_obsidian3.Setting(containerEl).setName("\u56FA\u5B9A\u76EE\u6807\u724C\u7EC4").setDesc("\u4EC5\u5728\u201C\u4F7F\u7528\u56FA\u5B9A\u724C\u7EC4\u201D\u6A21\u5F0F\u4E0B\u751F\u6548\uFF1B\u53EF\u70B9\u51FB\u5237\u65B0\u724C\u7EC4\u4ECE Anki \u81EA\u52A8\u8BFB\u53D6");
+      if (this.deckNames.length) {
+        const options = {};
+        const currentDeck = this.plugin.settings.ankiDeck || "\u7CFB\u7EDF\u9ED8\u8BA4";
+        if (!this.deckNames.includes(currentDeck)) {
+          options[currentDeck] = `${currentDeck}\uFF08\u5F53\u524D\u8BBE\u7F6E\uFF0CAnki \u4E2D\u672A\u8BFB\u53D6\u5230\uFF09`;
+        }
+        for (const deck of this.deckNames) {
+          options[deck] = deck;
+        }
+        deckSetting.addDropdown(
+          (dropdown) => dropdown.addOptions(options).setValue(currentDeck).onChange(async (value) => {
+            this.plugin.settings.ankiDeck = value;
+            await this.plugin.saveSettings();
+          })
+        );
+      } else {
+        deckSetting.addText(
+          (text) => text.setPlaceholder("\u7CFB\u7EDF\u9ED8\u8BA4").setValue(this.plugin.settings.ankiDeck).onChange(async (value) => {
+            this.plugin.settings.ankiDeck = value.trim() || "\u7CFB\u7EDF\u9ED8\u8BA4";
+            await this.plugin.saveSettings();
+          })
+        );
       }
-      for (const deck of this.deckNames) {
-        options[deck] = deck;
-      }
-      deckSetting.addDropdown(
-        (dropdown) => dropdown.addOptions(options).setValue(currentDeck).onChange(async (value) => {
-          this.plugin.settings.ankiDeck = value;
-          await this.plugin.saveSettings();
-        })
-      );
-    } else {
-      deckSetting.addText(
-        (text) => text.setPlaceholder("\u7CFB\u7EDF\u9ED8\u8BA4").setValue(this.plugin.settings.ankiDeck).onChange(async (value) => {
-          this.plugin.settings.ankiDeck = value.trim() || "\u7CFB\u7EDF\u9ED8\u8BA4";
-          await this.plugin.saveSettings();
-        })
-      );
     }
     new import_obsidian3.Setting(containerEl).setName("\u8FDE\u63A5\u4E0E\u724C\u7EC4").setDesc(this.deckStatus || "\u6D4B\u8BD5\u8FDE\u63A5\u4F1A\u8BFB\u53D6 AnkiConnect \u7248\u672C\u548C\u5F53\u524D\u724C\u7EC4\u5217\u8868").addButton(
       (btn) => btn.setButtonText(this.loadingDecks ? "\u8BFB\u53D6\u4E2D..." : "\u5237\u65B0\u724C\u7EC4").setDisabled(this.loadingDecks).onClick(async () => {
@@ -1094,6 +1115,7 @@ var DEFAULT_SETTINGS = {
   ankiConnectUrl: "http://127.0.0.1:8765",
   ankiApiKey: "",
   ankiDeck: "\u7CFB\u7EDF\u9ED8\u8BA4",
+  ankiDeckMode: "source_file",
   ankiTags: "Obsidian_to_Anki flashcards_llm",
   autoImportToAnki: true,
   createMissingDeck: true,
@@ -1740,7 +1762,7 @@ var FlashcardsLLMPlugin = class extends import_obsidian4.Plugin {
       return null;
     }
     try {
-      const deckName = this.settings.ankiDeck || "\u7CFB\u7EDF\u9ED8\u8BA4";
+      const deckName = resolveAnkiDeckName(this.settings, sourceFile);
       const client = createAnkiClient(this.settings);
       if (this.settings.createMissingDeck) {
         await client.createDeck(deckName);
@@ -1749,7 +1771,7 @@ var FlashcardsLLMPlugin = class extends import_obsidian4.Plugin {
       const result = await client.addNotes(notes);
       const summary = summarizeAddNotesResult(result, notes.length);
       new import_obsidian4.Notice(
-        `Anki \u5BFC\u5165\u5B8C\u6210\uFF1A\u89E3\u6790 ${summary.total} \u5F20\uFF0C\u65B0\u589E ${summary.added} \u5F20\uFF0C\u91CD\u590D/\u8DF3\u8FC7 ${summary.duplicateOrSkipped} \u5F20`
+        `Anki \u5BFC\u5165\u5B8C\u6210\uFF1A\u5DF2\u5BFC\u5165\u5230\u300C${deckName}\u300D\uFF0C\u89E3\u6790 ${summary.total} \u5F20\uFF0C\u65B0\u589E ${summary.added} \u5F20\uFF0C\u91CD\u590D/\u8DF3\u8FC7 ${summary.duplicateOrSkipped} \u5F20`
       );
       return summary;
     } catch (error) {

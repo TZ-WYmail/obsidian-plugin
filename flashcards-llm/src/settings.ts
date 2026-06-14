@@ -26,6 +26,7 @@ export interface FlashcardsSettings {
   ankiConnectUrl: string;
   ankiApiKey: string;
   ankiDeck: string;
+  ankiDeckMode: string;
   ankiTags: string;
   autoImportToAnki: boolean;
   createMissingDeck: boolean;
@@ -345,38 +346,57 @@ export class FlashcardsSettingsTab extends PluginSettingTab {
           })
       );
 
-    const deckSetting = new Setting(containerEl)
-      .setName("目标牌组")
-      .setDesc("插件生成或批量导入的卡片会写入这个 Anki 牌组；可点击刷新牌组从 Anki 自动读取");
-
-    if (this.deckNames.length) {
-      const options: Record<string, string> = {};
-      const currentDeck = this.plugin.settings.ankiDeck || "系统默认";
-      if (!this.deckNames.includes(currentDeck)) {
-        options[currentDeck] = `${currentDeck}（当前设置，Anki 中未读取到）`;
-      }
-      for (const deck of this.deckNames) {
-        options[deck] = deck;
-      }
-      deckSetting.addDropdown((dropdown) =>
+    new Setting(containerEl)
+      .setName("牌组命名方式")
+      .setDesc("默认跟随当前打开的 Markdown 文件名；例如打开“算法.md”时导入到 Anki 牌组“算法”")
+      .addDropdown((dropdown) =>
         dropdown
-          .addOptions(options)
-          .setValue(currentDeck)
+          .addOptions({
+            source_file: "跟随当前笔记名（推荐）",
+            fixed: "使用固定牌组"
+          })
+          .setValue(this.plugin.settings.ankiDeckMode || "source_file")
           .onChange(async (value) => {
-            this.plugin.settings.ankiDeck = value;
+            this.plugin.settings.ankiDeckMode = value;
             await this.plugin.saveSettings();
+            this.display();
           })
       );
-    } else {
-      deckSetting.addText((text) =>
-        text
-          .setPlaceholder("系统默认")
-          .setValue(this.plugin.settings.ankiDeck)
-          .onChange(async (value) => {
-            this.plugin.settings.ankiDeck = value.trim() || "系统默认";
-            await this.plugin.saveSettings();
-          })
-      );
+
+    if ((this.plugin.settings.ankiDeckMode || "source_file") === "fixed") {
+      const deckSetting = new Setting(containerEl)
+        .setName("固定目标牌组")
+        .setDesc("仅在“使用固定牌组”模式下生效；可点击刷新牌组从 Anki 自动读取");
+
+      if (this.deckNames.length) {
+        const options: Record<string, string> = {};
+        const currentDeck = this.plugin.settings.ankiDeck || "系统默认";
+        if (!this.deckNames.includes(currentDeck)) {
+          options[currentDeck] = `${currentDeck}（当前设置，Anki 中未读取到）`;
+        }
+        for (const deck of this.deckNames) {
+          options[deck] = deck;
+        }
+        deckSetting.addDropdown((dropdown) =>
+          dropdown
+            .addOptions(options)
+            .setValue(currentDeck)
+            .onChange(async (value) => {
+              this.plugin.settings.ankiDeck = value;
+              await this.plugin.saveSettings();
+            })
+        );
+      } else {
+        deckSetting.addText((text) =>
+          text
+            .setPlaceholder("系统默认")
+            .setValue(this.plugin.settings.ankiDeck)
+            .onChange(async (value) => {
+              this.plugin.settings.ankiDeck = value.trim() || "系统默认";
+              await this.plugin.saveSettings();
+            })
+        );
+      }
     }
 
     new Setting(containerEl)

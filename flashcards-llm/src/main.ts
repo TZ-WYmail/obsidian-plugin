@@ -13,6 +13,7 @@ import {
   buildAnkiNotes,
   createAnkiClient,
   parseGeneratedCards,
+  resolveAnkiDeckName,
   summarizeAddNotesResult
 } from "./anki";
 import type { ImportSummary } from "./anki";
@@ -49,6 +50,7 @@ const DEFAULT_SETTINGS: FlashcardsSettings = {
   ankiConnectUrl: "http://127.0.0.1:8765",
   ankiApiKey: "",
   ankiDeck: "系统默认",
+  ankiDeckMode: "source_file",
   ankiTags: "Obsidian_to_Anki flashcards_llm",
   autoImportToAnki: true,
   createMissingDeck: true,
@@ -802,7 +804,7 @@ export default class FlashcardsLLMPlugin extends Plugin {
     }
 
     try {
-      const deckName = this.settings.ankiDeck || "系统默认";
+      const deckName = resolveAnkiDeckName(this.settings, sourceFile);
       const client = createAnkiClient(this.settings);
       if (this.settings.createMissingDeck) {
         await client.createDeck(deckName);
@@ -812,7 +814,7 @@ export default class FlashcardsLLMPlugin extends Plugin {
       const result = await client.addNotes(notes);
       const summary = summarizeAddNotesResult(result, notes.length);
       new Notice(
-        `Anki 导入完成：解析 ${summary.total} 张，新增 ${summary.added} 张，重复/跳过 ${summary.duplicateOrSkipped} 张`
+        `Anki 导入完成：已导入到「${deckName}」，解析 ${summary.total} 张，新增 ${summary.added} 张，重复/跳过 ${summary.duplicateOrSkipped} 张`
       );
       return summary;
     } catch (error) {
