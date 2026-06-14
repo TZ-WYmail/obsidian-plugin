@@ -54,3 +54,46 @@
   padding: 0 0.08em;
   text-decoration: none;
 }
+
+.flashcards-llm-review-modal {
+  min-width: min(760px, 90vw);
+}
+
+.flashcards-llm-review-status {
+  color: var(--text-muted);
+  margin: 8px 0 14px;
+}
+
+.flashcards-llm-review-card {
+  margin: 12px 0;
+  padding: 18px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 14px;
+  background: var(--background-secondary);
+}
+
+.flashcards-llm-review-answer {
+  border-color: var(--interactive-accent);
+}
+
+.flashcards-llm-review-label {
+  margin-bottom: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.flashcards-llm-review-body {
+  font-size: 1.08em;
+  line-height: 1.65;
+}
+
+.flashcards-llm-review-body .cloze {
+  color: var(--text-accent);
+  font-weight: 700;
+}
+
+.flashcards-llm-review-body img {
+  max-width: 100%;
+}

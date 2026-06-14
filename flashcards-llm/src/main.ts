@@ -7,16 +7,17 @@ import {
   generateTwoSidedKnowledgeCard,
   renderCards
 } from "./flashcards";
-import { GenerateModeModal, PreviewModal } from "./components";
+import { AnkiReviewModal, GenerateModeModal, PreviewModal } from "./components";
 import { FlashcardsSettings, FlashcardsSettingsTab } from "./settings";
 import {
+  buildDeckSearchQuery,
   buildAnkiNotes,
   createAnkiClient,
   parseGeneratedCards,
   resolveAnkiDeckName,
   summarizeAddNotesResult
 } from "./anki";
-import type { ImportSummary } from "./anki";
+import type { AnkiCardInfo, ImportSummary } from "./anki";
 
 interface MarkedKeyPoint {
   markerId: string;
@@ -54,6 +55,7 @@ const DEFAULT_SETTINGS: FlashcardsSettings = {
   ankiTags: "Obsidian_to_Anki flashcards_llm",
   autoImportToAnki: true,
   createMissingDeck: true,
+  ankiReviewLimit: 20,
   ankiBasicModel: "Basic",
   ankiBasicFrontField: "Front",
   ankiBasicBackField: "Back",
@@ -136,6 +138,14 @@ export default class FlashcardsLLMPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "review-current-note-anki-deck",
+      name: "在 Obsidian 中复习当前笔记牌组",
+      callback: async () => {
+        await this.openAnkiReviewForActiveDeck();
+      }
+    });
+
     this.addSettingTab(new FlashcardsSettingsTab(this.app, this));
 
     this.registerDomEvent(document, "selectionchange", () => {
@@ -184,6 +194,58 @@ export default class FlashcardsLLMPlugin extends Plugin {
       return null;
     }
     return this.importCardFolderToAnki(view.file);
+  }
+
+  async openAnkiReviewForActiveDeck(): Promise<void> {
+    const sourceFile = this.getActiveSourceFile();
+    if ((this.settings.ankiDeckMode || "source_file") === "source_file" && !sourceFile) {
+      new Notice("请先打开一个 Markdown 笔记，再复习当前笔记同名牌组");
+      return;
+    }
+
+    const deckName = resolveAnkiDeckName(this.settings, sourceFile);
+    try {
+      const cards = await this.loadAnkiReviewCards(deckName);
+      new AnkiReviewModal(this.app, {
+        deckName,
+        cards,
+        onAnswer: async (card, ease) => this.answerAnkiCard(card, ease),
+        onReload: async () => this.loadAnkiReviewCards(deckName)
+      }).open();
+    } catch (error) {
+      console.error("打开 Obsidian 内 Anki 复习失败：", error);
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`打开 Anki 复习失败：${message}`);
+    }
+  }
+
+  private getActiveSourceFile(): TFile | undefined {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    return view?.file instanceof TFile ? view.file : undefined;
+  }
+
+  private async loadAnkiReviewCards(deckName: string): Promise<AnkiCardInfo[]> {
+    const client = createAnkiClient(this.settings);
+    const dueIds = await client.findCards(buildDeckSearchQuery(deckName, "is:due -is:suspended"));
+    const newIds = await client.findCards(buildDeckSearchQuery(deckName, "is:new -is:suspended"));
+    const ids = Array.from(new Set([...dueIds, ...newIds])).slice(0, this.getAnkiReviewLimit());
+    if (!ids.length) {
+      return [];
+    }
+    return (await client.cardsInfo(ids)).filter((card) => typeof card.cardId === "number");
+  }
+
+  private async answerAnkiCard(card: AnkiCardInfo, ease: number): Promise<boolean> {
+    const result = await createAnkiClient(this.settings).answerCards([{ cardId: card.cardId, ease }]);
+    return result[0] === true;
+  }
+
+  private getAnkiReviewLimit(): number {
+    const limit = Math.trunc(this.settings.ankiReviewLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return 20;
+    }
+    return Math.min(limit, 200);
   }
 
   private getSourceText(editor: Editor): string {

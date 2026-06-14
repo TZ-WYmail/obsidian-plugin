@@ -37,6 +37,31 @@ export interface ImportSummary {
   failed: number;
 }
 
+export interface AnkiCardField {
+  value: string;
+  order: number;
+}
+
+export interface AnkiCardInfo {
+  cardId: number;
+  fields: Record<string, AnkiCardField>;
+  question: string;
+  answer: string;
+  modelName: string;
+  deckName: string;
+  interval: number;
+  queue: number;
+  due: number;
+  reps: number;
+  lapses: number;
+  nextReviews?: string[];
+}
+
+export interface AnkiCardAnswer {
+  cardId: number;
+  ease: number;
+}
+
 export class AnkiConnectClient {
   constructor(private readonly url: string, private readonly apiKey: string) {}
 
@@ -89,6 +114,18 @@ export class AnkiConnectClient {
   addNotes(notes: AnkiNote[]): Promise<Array<number | null>> {
     return this.request<Array<number | null>>("addNotes", { notes });
   }
+
+  findCards(query: string): Promise<number[]> {
+    return this.request<number[]>("findCards", { query });
+  }
+
+  cardsInfo(cards: number[]): Promise<AnkiCardInfo[]> {
+    return this.request<AnkiCardInfo[]>("cardsInfo", { cards });
+  }
+
+  answerCards(answers: AnkiCardAnswer[]): Promise<boolean[]> {
+    return this.request<boolean[]>("answerCards", { answers });
+  }
 }
 
 export function createAnkiClient(settings: FlashcardsSettings): AnkiConnectClient {
@@ -100,6 +137,10 @@ export function resolveAnkiDeckName(settings: FlashcardsSettings, sourceFile?: T
     return sanitizeAnkiDeckName(sourceFile.basename);
   }
   return sanitizeAnkiDeckName(settings.ankiDeck || "系统默认");
+}
+
+export function buildDeckSearchQuery(deckName: string, filter: string): string {
+  return `deck:"${escapeAnkiSearchText(deckName)}" ${filter}`.trim();
 }
 
 export function parseGeneratedCards(text: string): ParsedAnkiCard[] {
@@ -220,4 +261,8 @@ function sanitizeAnkiDeckName(name: string): string {
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")
     .trim() || "系统默认";
+}
+
+function escapeAnkiSearchText(text: string): string {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
 }

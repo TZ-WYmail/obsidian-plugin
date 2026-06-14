@@ -1,8 +1,9 @@
-import { App, Modal, Setting, TextAreaComponent } from "obsidian";
+import { App, Modal, Notice, sanitizeHTMLToDom, Setting, TextAreaComponent } from "obsidian";
 import { CardMode } from "./flashcards";
 import { FlashcardsSettings } from "./settings";
 import FlashcardsLLMPlugin from "./main";
 import { availableReasoningModels } from "./models";
+import type { AnkiCardInfo } from "./anki";
 
 export interface GenerationRequest {
   configuration: FlashcardsSettings;
@@ -16,6 +17,13 @@ export interface PreviewResult {
 export interface PreviewModalOptions {
   generating?: boolean;
   onCancel?: () => void;
+}
+
+export interface AnkiReviewModalOptions {
+  deckName: string;
+  cards: AnkiCardInfo[];
+  onAnswer: (card: AnkiCardInfo, ease: number) => Promise<boolean>;
+  onReload: () => Promise<AnkiCardInfo[]>;
 }
 
 export class GenerateModeModal extends Modal {
@@ -246,6 +254,192 @@ export class PreviewModal extends Modal {
     const inputEl = this.textArea?.inputEl;
     if (inputEl) {
       inputEl.scrollTop = inputEl.scrollHeight;
+    }
+  }
+}
+
+export class AnkiReviewModal extends Modal {
+  private deckName: string;
+  private cards: AnkiCardInfo[];
+  private readonly onAnswer: (card: AnkiCardInfo, ease: number) => Promise<boolean>;
+  private readonly onReload: () => Promise<AnkiCardInfo[]>;
+  private index = 0;
+  private answerVisible = false;
+  private busy = false;
+
+  constructor(app: App, options: AnkiReviewModalOptions) {
+    super(app);
+    this.deckName = options.deckName;
+    this.cards = options.cards;
+    this.onAnswer = options.onAnswer;
+    this.onReload = options.onReload;
+  }
+
+  onOpen() {
+    this.render();
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+
+  private render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("flashcards-llm-review-modal");
+    contentEl.createEl("h2", { text: "Anki 复习" });
+
+    if (!this.cards.length) {
+      contentEl.createEl("p", {
+        cls: "flashcards-llm-review-status",
+        text: `「${this.deckName}」暂无待复习或新卡片。`
+      });
+      new Setting(contentEl)
+        .addButton((btn) =>
+          btn.setButtonText("刷新").setCta().onClick(() => {
+            void this.reload();
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText("关闭").onClick(() => {
+            this.close();
+          })
+        );
+      return;
+    }
+
+    if (this.index >= this.cards.length) {
+      contentEl.createEl("p", {
+        cls: "flashcards-llm-review-status",
+        text: `本轮已完成 ${this.cards.length} 张卡片。`
+      });
+      new Setting(contentEl)
+        .addButton((btn) =>
+          btn.setButtonText("继续刷新").setCta().onClick(() => {
+            void this.reload();
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText("关闭").onClick(() => {
+            this.close();
+          })
+        );
+      return;
+    }
+
+    const card = this.cards[this.index];
+    contentEl.createEl("p", {
+      cls: "flashcards-llm-review-status",
+      text: `牌组：${this.deckName} ｜ ${this.index + 1} / ${this.cards.length} ｜ 模板：${card.modelName} ｜ 已复习：${card.reps}`
+    });
+
+    const questionEl = contentEl.createDiv({ cls: "flashcards-llm-review-card" });
+    questionEl.createEl("div", { cls: "flashcards-llm-review-label", text: "题面" });
+    const questionBody = questionEl.createDiv({ cls: "flashcards-llm-review-body" });
+    this.renderHtml(questionBody, card.question);
+
+    if (this.answerVisible) {
+      const answerEl = contentEl.createDiv({ cls: "flashcards-llm-review-card flashcards-llm-review-answer" });
+      answerEl.createEl("div", { cls: "flashcards-llm-review-label", text: "答案" });
+      const answerBody = answerEl.createDiv({ cls: "flashcards-llm-review-body" });
+      this.renderHtml(answerBody, card.answer);
+    }
+
+    if (!this.answerVisible) {
+      new Setting(contentEl)
+        .addButton((btn) =>
+          btn.setButtonText("显示答案").setCta().setDisabled(this.busy).onClick(() => {
+            this.answerVisible = true;
+            this.render();
+          })
+        )
+        .addButton((btn) =>
+          btn.setButtonText("跳过").setDisabled(this.busy).onClick(() => {
+            this.index += 1;
+            this.render();
+          })
+        );
+      return;
+    }
+
+    new Setting(contentEl)
+      .addButton((btn) =>
+        btn.setButtonText(this.answerButtonLabel("重来", card, 1)).setDisabled(this.busy).onClick(() => {
+          void this.submitAnswer(1);
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText(this.answerButtonLabel("困难", card, 2)).setDisabled(this.busy).onClick(() => {
+          void this.submitAnswer(2);
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText(this.answerButtonLabel("良好", card, 3)).setCta().setDisabled(this.busy).onClick(() => {
+          void this.submitAnswer(3);
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText(this.answerButtonLabel("简单", card, 4)).setDisabled(this.busy).onClick(() => {
+          void this.submitAnswer(4);
+        })
+      );
+  }
+
+  private renderHtml(container: HTMLElement, html: string) {
+    container.empty();
+    const withoutStyle = html.replace(/<style[\s\S]*?<\/style>/gi, "");
+    container.appendChild(sanitizeHTMLToDom(withoutStyle || ""));
+  }
+
+  private answerButtonLabel(label: string, card: AnkiCardInfo, ease: number): string {
+    const interval = card.nextReviews?.[ease - 1]?.replace(/[<>]/g, "").trim();
+    return interval ? `${label} ${interval}` : label;
+  }
+
+  private async submitAnswer(ease: number) {
+    if (this.busy || this.index >= this.cards.length) {
+      return;
+    }
+    this.busy = true;
+    this.render();
+
+    const card = this.cards[this.index];
+    try {
+      const ok = await this.onAnswer(card, ease);
+      if (!ok) {
+        new Notice("Anki 未接受本次评分，请确认该卡仍可复习");
+        this.busy = false;
+        this.render();
+        return;
+      }
+      this.index += 1;
+      this.answerVisible = false;
+      this.busy = false;
+      this.render();
+    } catch (error) {
+      console.error("提交 Anki 评分失败：", error);
+      new Notice("提交 Anki 评分失败，请查看控制台详情");
+      this.busy = false;
+      this.render();
+    }
+  }
+
+  private async reload() {
+    if (this.busy) {
+      return;
+    }
+    this.busy = true;
+    this.render();
+    try {
+      this.cards = await this.onReload();
+      this.index = 0;
+      this.answerVisible = false;
+    } catch (error) {
+      console.error("刷新 Anki 复习队列失败：", error);
+      new Notice("刷新 Anki 复习队列失败，请查看控制台详情");
+    } finally {
+      this.busy = false;
+      this.render();
     }
   }
 }

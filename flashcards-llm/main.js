@@ -618,6 +618,162 @@ var PreviewModal = class extends import_obsidian.Modal {
     }
   }
 };
+var AnkiReviewModal = class extends import_obsidian.Modal {
+  constructor(app, options) {
+    super(app);
+    this.index = 0;
+    this.answerVisible = false;
+    this.busy = false;
+    this.deckName = options.deckName;
+    this.cards = options.cards;
+    this.onAnswer = options.onAnswer;
+    this.onReload = options.onReload;
+  }
+  onOpen() {
+    this.render();
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("flashcards-llm-review-modal");
+    contentEl.createEl("h2", { text: "Anki \u590D\u4E60" });
+    if (!this.cards.length) {
+      contentEl.createEl("p", {
+        cls: "flashcards-llm-review-status",
+        text: `\u300C${this.deckName}\u300D\u6682\u65E0\u5F85\u590D\u4E60\u6216\u65B0\u5361\u7247\u3002`
+      });
+      new import_obsidian.Setting(contentEl).addButton(
+        (btn) => btn.setButtonText("\u5237\u65B0").setCta().onClick(() => {
+          void this.reload();
+        })
+      ).addButton(
+        (btn) => btn.setButtonText("\u5173\u95ED").onClick(() => {
+          this.close();
+        })
+      );
+      return;
+    }
+    if (this.index >= this.cards.length) {
+      contentEl.createEl("p", {
+        cls: "flashcards-llm-review-status",
+        text: `\u672C\u8F6E\u5DF2\u5B8C\u6210 ${this.cards.length} \u5F20\u5361\u7247\u3002`
+      });
+      new import_obsidian.Setting(contentEl).addButton(
+        (btn) => btn.setButtonText("\u7EE7\u7EED\u5237\u65B0").setCta().onClick(() => {
+          void this.reload();
+        })
+      ).addButton(
+        (btn) => btn.setButtonText("\u5173\u95ED").onClick(() => {
+          this.close();
+        })
+      );
+      return;
+    }
+    const card = this.cards[this.index];
+    contentEl.createEl("p", {
+      cls: "flashcards-llm-review-status",
+      text: `\u724C\u7EC4\uFF1A${this.deckName} \uFF5C ${this.index + 1} / ${this.cards.length} \uFF5C \u6A21\u677F\uFF1A${card.modelName} \uFF5C \u5DF2\u590D\u4E60\uFF1A${card.reps}`
+    });
+    const questionEl = contentEl.createDiv({ cls: "flashcards-llm-review-card" });
+    questionEl.createEl("div", { cls: "flashcards-llm-review-label", text: "\u9898\u9762" });
+    const questionBody = questionEl.createDiv({ cls: "flashcards-llm-review-body" });
+    this.renderHtml(questionBody, card.question);
+    if (this.answerVisible) {
+      const answerEl = contentEl.createDiv({ cls: "flashcards-llm-review-card flashcards-llm-review-answer" });
+      answerEl.createEl("div", { cls: "flashcards-llm-review-label", text: "\u7B54\u6848" });
+      const answerBody = answerEl.createDiv({ cls: "flashcards-llm-review-body" });
+      this.renderHtml(answerBody, card.answer);
+    }
+    if (!this.answerVisible) {
+      new import_obsidian.Setting(contentEl).addButton(
+        (btn) => btn.setButtonText("\u663E\u793A\u7B54\u6848").setCta().setDisabled(this.busy).onClick(() => {
+          this.answerVisible = true;
+          this.render();
+        })
+      ).addButton(
+        (btn) => btn.setButtonText("\u8DF3\u8FC7").setDisabled(this.busy).onClick(() => {
+          this.index += 1;
+          this.render();
+        })
+      );
+      return;
+    }
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText(this.answerButtonLabel("\u91CD\u6765", card, 1)).setDisabled(this.busy).onClick(() => {
+        void this.submitAnswer(1);
+      })
+    ).addButton(
+      (btn) => btn.setButtonText(this.answerButtonLabel("\u56F0\u96BE", card, 2)).setDisabled(this.busy).onClick(() => {
+        void this.submitAnswer(2);
+      })
+    ).addButton(
+      (btn) => btn.setButtonText(this.answerButtonLabel("\u826F\u597D", card, 3)).setCta().setDisabled(this.busy).onClick(() => {
+        void this.submitAnswer(3);
+      })
+    ).addButton(
+      (btn) => btn.setButtonText(this.answerButtonLabel("\u7B80\u5355", card, 4)).setDisabled(this.busy).onClick(() => {
+        void this.submitAnswer(4);
+      })
+    );
+  }
+  renderHtml(container, html) {
+    container.empty();
+    const withoutStyle = html.replace(/<style[\s\S]*?<\/style>/gi, "");
+    container.appendChild((0, import_obsidian.sanitizeHTMLToDom)(withoutStyle || ""));
+  }
+  answerButtonLabel(label, card, ease) {
+    var _a, _b;
+    const interval = (_b = (_a = card.nextReviews) == null ? void 0 : _a[ease - 1]) == null ? void 0 : _b.replace(/[<>]/g, "").trim();
+    return interval ? `${label} ${interval}` : label;
+  }
+  async submitAnswer(ease) {
+    if (this.busy || this.index >= this.cards.length) {
+      return;
+    }
+    this.busy = true;
+    this.render();
+    const card = this.cards[this.index];
+    try {
+      const ok = await this.onAnswer(card, ease);
+      if (!ok) {
+        new import_obsidian.Notice("Anki \u672A\u63A5\u53D7\u672C\u6B21\u8BC4\u5206\uFF0C\u8BF7\u786E\u8BA4\u8BE5\u5361\u4ECD\u53EF\u590D\u4E60");
+        this.busy = false;
+        this.render();
+        return;
+      }
+      this.index += 1;
+      this.answerVisible = false;
+      this.busy = false;
+      this.render();
+    } catch (error) {
+      console.error("\u63D0\u4EA4 Anki \u8BC4\u5206\u5931\u8D25\uFF1A", error);
+      new import_obsidian.Notice("\u63D0\u4EA4 Anki \u8BC4\u5206\u5931\u8D25\uFF0C\u8BF7\u67E5\u770B\u63A7\u5236\u53F0\u8BE6\u60C5");
+      this.busy = false;
+      this.render();
+    }
+  }
+  async reload() {
+    if (this.busy) {
+      return;
+    }
+    this.busy = true;
+    this.render();
+    try {
+      this.cards = await this.onReload();
+      this.index = 0;
+      this.answerVisible = false;
+    } catch (error) {
+      console.error("\u5237\u65B0 Anki \u590D\u4E60\u961F\u5217\u5931\u8D25\uFF1A", error);
+      new import_obsidian.Notice("\u5237\u65B0 Anki \u590D\u4E60\u961F\u5217\u5931\u8D25\uFF0C\u8BF7\u67E5\u770B\u63A7\u5236\u53F0\u8BE6\u60C5");
+    } finally {
+      this.busy = false;
+      this.render();
+    }
+  }
+};
 
 // src/settings.ts
 var import_obsidian3 = require("obsidian");
@@ -670,6 +826,15 @@ var AnkiConnectClient = class {
   addNotes(notes) {
     return this.request("addNotes", { notes });
   }
+  findCards(query) {
+    return this.request("findCards", { query });
+  }
+  cardsInfo(cards) {
+    return this.request("cardsInfo", { cards });
+  }
+  answerCards(answers) {
+    return this.request("answerCards", { answers });
+  }
 };
 function createAnkiClient(settings) {
   return new AnkiConnectClient(settings.ankiConnectUrl || "http://127.0.0.1:8765", settings.ankiApiKey || "");
@@ -679,6 +844,9 @@ function resolveAnkiDeckName(settings, sourceFile) {
     return sanitizeAnkiDeckName(sourceFile.basename);
   }
   return sanitizeAnkiDeckName(settings.ankiDeck || "\u7CFB\u7EDF\u9ED8\u8BA4");
+}
+function buildDeckSearchQuery(deckName, filter) {
+  return `deck:"${escapeAnkiSearchText(deckName)}" ${filter}`.trim();
 }
 function parseGeneratedCards(text) {
   var _a;
@@ -769,6 +937,9 @@ function formatAnkiField(text) {
 }
 function sanitizeAnkiDeckName(name) {
   return name.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim() || "\u7CFB\u7EDF\u9ED8\u8BA4";
+}
+function escapeAnkiSearchText(text) {
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 // src/settings.ts
@@ -986,6 +1157,12 @@ var FlashcardsSettingsTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
+    new import_obsidian3.Setting(containerEl).setName("\u6BCF\u8F6E\u590D\u4E60\u4E0A\u9650").setDesc("\u5728 Obsidian \u5185\u590D\u4E60\u65F6\uFF0C\u4E00\u6B21\u6700\u591A\u8BFB\u53D6\u591A\u5C11\u5F20\u5F85\u590D\u4E60/\u65B0\u5361\uFF1B\u9ED8\u8BA4 20\uFF0C\u6700\u5927 200").addText(
+      (text) => text.setPlaceholder("20").setValue(String(this.plugin.settings.ankiReviewLimit || 20)).onChange(async (value) => {
+        this.plugin.settings.ankiReviewLimit = Number(value) || 20;
+        await this.plugin.saveSettings();
+      })
+    );
     new import_obsidian3.Setting(containerEl).setName("Anki \u6807\u7B7E").setDesc("\u5BFC\u5165 Anki \u65F6\u9644\u52A0\u7684\u6807\u7B7E\uFF0C\u591A\u4E2A\u6807\u7B7E\u53EF\u7528\u7A7A\u683C\u6216\u82F1\u6587\u9017\u53F7\u5206\u9694").addText(
       (text) => text.setPlaceholder("Obsidian_to_Anki flashcards_llm").setValue(this.plugin.settings.ankiTags).onChange(async (value) => {
         this.plugin.settings.ankiTags = value;
@@ -1038,6 +1215,10 @@ var FlashcardsSettingsTab = class extends import_obsidian3.PluginSettingTab {
     ).addButton(
       (btn) => btn.setButtonText("\u5BFC\u5165\u5F53\u524D\u5361\u7247\u6587\u4EF6\u5939").setCta().onClick(() => {
         void this.plugin.importCurrentNoteCardsToAnki();
+      })
+    ).addButton(
+      (btn) => btn.setButtonText("\u5F00\u59CB\u590D\u4E60").onClick(() => {
+        void this.plugin.openAnkiReviewForActiveDeck();
       })
     );
   }
@@ -1119,6 +1300,7 @@ var DEFAULT_SETTINGS = {
   ankiTags: "Obsidian_to_Anki flashcards_llm",
   autoImportToAnki: true,
   createMissingDeck: true,
+  ankiReviewLimit: 20,
   ankiBasicModel: "Basic",
   ankiBasicFrontField: "Front",
   ankiBasicBackField: "Back",
@@ -1192,6 +1374,13 @@ var FlashcardsLLMPlugin = class extends import_obsidian4.Plugin {
         await this.testAnkiConnection();
       }
     });
+    this.addCommand({
+      id: "review-current-note-anki-deck",
+      name: "\u5728 Obsidian \u4E2D\u590D\u4E60\u5F53\u524D\u7B14\u8BB0\u724C\u7EC4",
+      callback: async () => {
+        await this.openAnkiReviewForActiveDeck();
+      }
+    });
     this.addSettingTab(new FlashcardsSettingsTab(this.app, this));
     this.registerDomEvent(document, "selectionchange", () => {
       this.handleSelectionChange();
@@ -1234,6 +1423,52 @@ var FlashcardsLLMPlugin = class extends import_obsidian4.Plugin {
       return null;
     }
     return this.importCardFolderToAnki(view.file);
+  }
+  async openAnkiReviewForActiveDeck() {
+    const sourceFile = this.getActiveSourceFile();
+    if ((this.settings.ankiDeckMode || "source_file") === "source_file" && !sourceFile) {
+      new import_obsidian4.Notice("\u8BF7\u5148\u6253\u5F00\u4E00\u4E2A Markdown \u7B14\u8BB0\uFF0C\u518D\u590D\u4E60\u5F53\u524D\u7B14\u8BB0\u540C\u540D\u724C\u7EC4");
+      return;
+    }
+    const deckName = resolveAnkiDeckName(this.settings, sourceFile);
+    try {
+      const cards = await this.loadAnkiReviewCards(deckName);
+      new AnkiReviewModal(this.app, {
+        deckName,
+        cards,
+        onAnswer: async (card, ease) => this.answerAnkiCard(card, ease),
+        onReload: async () => this.loadAnkiReviewCards(deckName)
+      }).open();
+    } catch (error) {
+      console.error("\u6253\u5F00 Obsidian \u5185 Anki \u590D\u4E60\u5931\u8D25\uFF1A", error);
+      const message = error instanceof Error ? error.message : String(error);
+      new import_obsidian4.Notice(`\u6253\u5F00 Anki \u590D\u4E60\u5931\u8D25\uFF1A${message}`);
+    }
+  }
+  getActiveSourceFile() {
+    const view = this.app.workspace.getActiveViewOfType(import_obsidian4.MarkdownView);
+    return (view == null ? void 0 : view.file) instanceof import_obsidian4.TFile ? view.file : void 0;
+  }
+  async loadAnkiReviewCards(deckName) {
+    const client = createAnkiClient(this.settings);
+    const dueIds = await client.findCards(buildDeckSearchQuery(deckName, "is:due -is:suspended"));
+    const newIds = await client.findCards(buildDeckSearchQuery(deckName, "is:new -is:suspended"));
+    const ids = Array.from(/* @__PURE__ */ new Set([...dueIds, ...newIds])).slice(0, this.getAnkiReviewLimit());
+    if (!ids.length) {
+      return [];
+    }
+    return (await client.cardsInfo(ids)).filter((card) => typeof card.cardId === "number");
+  }
+  async answerAnkiCard(card, ease) {
+    const result = await createAnkiClient(this.settings).answerCards([{ cardId: card.cardId, ease }]);
+    return result[0] === true;
+  }
+  getAnkiReviewLimit() {
+    const limit = Math.trunc(this.settings.ankiReviewLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return 20;
+    }
+    return Math.min(limit, 200);
   }
   getSourceText(editor) {
     if (editor.somethingSelected()) {

@@ -30,6 +30,7 @@ export interface FlashcardsSettings {
   ankiTags: string;
   autoImportToAnki: boolean;
   createMissingDeck: boolean;
+  ankiReviewLimit: number;
   ankiBasicModel: string;
   ankiBasicFrontField: string;
   ankiBasicBackField: string;
@@ -444,6 +445,19 @@ export class FlashcardsSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("每轮复习上限")
+      .setDesc("在 Obsidian 内复习时，一次最多读取多少张待复习/新卡；默认 20，最大 200")
+      .addText((text) =>
+        text
+          .setPlaceholder("20")
+          .setValue(String(this.plugin.settings.ankiReviewLimit || 20))
+          .onChange(async (value) => {
+            this.plugin.settings.ankiReviewLimit = Number(value) || 20;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Anki 标签")
       .setDesc("导入 Anki 时附加的标签，多个标签可用空格或英文逗号分隔")
       .addText((text) =>
@@ -544,6 +558,11 @@ export class FlashcardsSettingsTab extends PluginSettingTab {
       .addButton((btn) =>
         btn.setButtonText("导入当前卡片文件夹").setCta().onClick(() => {
           void this.plugin.importCurrentNoteCardsToAnki();
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("开始复习").onClick(() => {
+          void this.plugin.openAnkiReviewForActiveDeck();
         })
       );
   }

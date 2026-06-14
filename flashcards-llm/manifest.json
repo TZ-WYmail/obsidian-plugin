@@ -1,7 +1,7 @@
 {
   "id": "flashcards-llm",
   "name": "闪卡 LLM（自改中文版）",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "minAppVersion": "0.15.0",
   "description": "使用大语言模型把 Obsidian 选中文本或高亮内容自动整理为可同步到 Anki 的问答卡和填空卡",
   "author": "TZ-WYmail / Marco Pampaloni",
