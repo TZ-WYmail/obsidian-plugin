@@ -18,6 +18,9 @@ export function normalizeSourceText(text: string): string {
   return text
     .replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "")
     .replace(/<\/u>/gi, "")
+    .replace(/^\s*%%\s*flashcards-llm-key-point:(?:start\s+id=[^\s%]+|end)\s*%%\s*$/gim, "")
+    .replace(/%%\s*flashcards-llm-key-point:id=[^\s%]+\s*%%/gi, "")
+    .replace(/==([\s\S]*?)==/g, "$1")
     .replace(/<!--.*?-->/gs, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -27,6 +30,9 @@ export function cleanSourceTextForCard(text: string): string {
   return text
     .replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "")
     .replace(/<\/u>/gi, "")
+    .replace(/^\s*%%\s*flashcards-llm-key-point:(?:start\s+id=[^\s%]+|end)\s*%%\s*$/gim, "")
+    .replace(/%%\s*flashcards-llm-key-point:id=[^\s%]+\s*%%/gi, "")
+    .replace(/==([\s\S]*?)==/g, "$1")
     .replace(/<!--.*?-->/gs, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

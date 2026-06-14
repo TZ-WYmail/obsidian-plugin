@@ -17,6 +17,9 @@ interface MarkedKeyPoint {
   index: number;
 }
 
+const KEY_POINT_INLINE_MARKER_PATTERN = /%%\s*flashcards-llm-key-point:id=([^\s%]+)\s*%%/i;
+const KEY_POINT_BLOCK_START_PATTERN = /^\s*%%\s*flashcards-llm-key-point:start\s+id=([^\s%]+)\s*%%\s*$/i;
+
 const DEFAULT_SETTINGS: FlashcardsSettings = {
   apiKey: "",
   baseUrl: "https://api.openai.com",
@@ -66,8 +69,17 @@ export default class FlashcardsLLMPlugin extends Plugin {
     this.addCommand({
       id: "mark-selection-as-key-point",
       name: "把选中文本划为重点",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "H" }],
       editorCallback: (editor: Editor) => {
         this.markSelectionAsKeyPoint(editor);
+      }
+    });
+
+    this.addCommand({
+      id: "migrate-legacy-key-point-markers",
+      name: "修复旧版重点标记为安全格式",
+      editorCallback: (editor: Editor) => {
+        this.migrateLegacyKeyPointMarkers(editor);
       }
     });
 
@@ -214,6 +226,70 @@ export default class FlashcardsLLMPlugin extends Plugin {
     }, mode).open();
   }
 
+  private buildInlineKeyPointMarker(markerId: string): string {
+    return `%% flashcards-llm-key-point:id=${markerId} %%`;
+  }
+
+  private buildBlockKeyPointStartMarker(markerId: string): string {
+    return `%% flashcards-llm-key-point:start id=${markerId} %%`;
+  }
+
+  private buildBlockKeyPointEndMarker(): string {
+    return "%% flashcards-llm-key-point:end %%";
+  }
+
+  private buildSafeKeyPointMarkup(body: string, markerId: string): string {
+    const highlightedBody = this.highlightKeyPointMarkdown(body);
+    if (body.includes("\n")) {
+      return [
+        this.buildBlockKeyPointStartMarker(markerId),
+        highlightedBody,
+        this.buildBlockKeyPointEndMarker()
+      ].join("\n");
+    }
+
+    return `${highlightedBody} ${this.buildInlineKeyPointMarker(markerId)}`;
+  }
+
+  private highlightKeyPointMarkdown(text: string): string {
+    const lines = text.split("\n");
+    let inFence = false;
+
+    return lines.map((line) => {
+      const trimmed = line.trim();
+      if (/^(```|~~~)/.test(trimmed)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence || !trimmed || line.includes("==")) {
+        return line;
+      }
+      return this.highlightKeyPointLine(line);
+    }).join("\n");
+  }
+
+  private highlightKeyPointLine(line: string): string {
+    const structuralMatch = line.match(
+      /^(\s*(?:(?:>\s*)+)?(?:(?:#{1,6}\s+)|(?:(?:[-+*]|\d+[.)])\s+(?:\[[ xX-]\]\s+)?))?)(.*?)(\s*)$/
+    );
+    if (!structuralMatch) {
+      return `==${line}==`;
+    }
+
+    const prefix = structuralMatch[1] ?? "";
+    const content = structuralMatch[2] ?? "";
+    const trailing = structuralMatch[3] ?? "";
+    if (!content.trim()) {
+      return line;
+    }
+
+    const contentMatch = content.match(/^(\s*)(.*?)(\s*)$/);
+    const contentLeading = contentMatch?.[1] ?? "";
+    const contentBody = contentMatch?.[2] ?? content;
+    const contentTrailing = contentMatch?.[3] ?? "";
+    return `${prefix}${contentLeading}==${contentBody}==${contentTrailing}${trailing}`;
+  }
+
   private markSelectionAsKeyPoint(editor: Editor) {
     const selection = editor.getSelection();
     if (!selection.trim()) {
@@ -230,20 +306,46 @@ export default class FlashcardsLLMPlugin extends Plugin {
       new Notice("请先选中需要划重点的文本");
       return;
     }
-    if (/data-flashcards-llm-key=["']/.test(body)) {
+    if (
+      /data-flashcards-llm-key=["']/.test(body) ||
+      KEY_POINT_INLINE_MARKER_PATTERN.test(body) ||
+      body.split("\n").some((line) => KEY_POINT_BLOCK_START_PATTERN.test(line.trim()))
+    ) {
       new Notice("这段内容已经是重点");
-      return;
-    }
-    if (/<\/u>/i.test(body)) {
-      new Notice("选区包含已有下划线标记，请重新选择未被包裹的原文");
       return;
     }
 
     const sourceHash = buildSourceHash(body);
-    editor.replaceSelection(
-      `${leading}<u class="flashcards-llm-key-point" data-flashcards-llm-key="${sourceHash}">${body}</u>${trailing}`
-    );
+    editor.replaceSelection(`${leading}${this.buildSafeKeyPointMarkup(body, sourceHash)}${trailing}`);
     new Notice("已划重点，可使用批量命令生成卡片");
+  }
+
+  private migrateLegacyKeyPointMarkers(editor: Editor) {
+    const text = editor.getValue();
+    const legacyMarkerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
+    let migratedCount = 0;
+
+    const migrated = text.replace(legacyMarkerPattern, (fullMatch: string, rawBody: string) => {
+      const markerId = fullMatch.match(/data-flashcards-llm-key=["']([^"']+)["']/i)?.[1] ?? buildSourceHash(rawBody);
+      const match = rawBody.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      const leading = match?.[1] ?? "";
+      const body = match?.[2] ?? rawBody;
+      const trailing = match?.[3] ?? "";
+      if (!body.trim()) {
+        return rawBody;
+      }
+
+      migratedCount += 1;
+      return `${leading}${this.buildSafeKeyPointMarkup(body, markerId)}${trailing}`;
+    });
+
+    if (!migratedCount) {
+      new Notice("没有找到需要修复的旧版重点标记");
+      return;
+    }
+
+    editor.setValue(migrated);
+    new Notice(`已修复 ${migratedCount} 个旧版重点标记`);
   }
 
   private getEffectiveConfig(configuration: FlashcardsSettings): FlashcardsSettings | null {
@@ -275,16 +377,12 @@ export default class FlashcardsLLMPlugin extends Plugin {
 
   private extractMarkedKeyPoints(text: string): MarkedKeyPoint[] {
     const keyPoints: MarkedKeyPoint[] = [];
-    const markerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
-    let match: RegExpExecArray | null;
     let index = 0;
 
-    while ((match = markerPattern.exec(text)) !== null) {
-      const marker = match[0];
-      const markerId = marker.match(/data-flashcards-llm-key=["']([^"']+)["']/i)?.[1] ?? "";
-      const cleanedText = cleanSourceTextForCard(match[1]);
+    const addKeyPoint = (markerId: string, rawText: string) => {
+      const cleanedText = cleanSourceTextForCard(rawText);
       if (!cleanedText) {
-        continue;
+        return;
       }
       keyPoints.push({
         markerId,
@@ -293,6 +391,26 @@ export default class FlashcardsLLMPlugin extends Plugin {
         index
       });
       index += 1;
+    };
+
+    const blockPattern = /^\s*%%\s*flashcards-llm-key-point:start\s+id=([^\s%]+)\s*%%\s*$(\r?\n)([\s\S]*?)\2\s*%%\s*flashcards-llm-key-point:end\s*%%\s*$/gim;
+    const textWithoutBlocks = text.replace(blockPattern, (_full, markerId: string, _newline: string, body: string) => {
+      addKeyPoint(markerId, body);
+      return "\n";
+    });
+
+    const inlinePattern = /==([^\n]*?)==\s*%%\s*flashcards-llm-key-point:id=([^\s%]+)\s*%%/gi;
+    let inlineMatch: RegExpExecArray | null;
+    while ((inlineMatch = inlinePattern.exec(textWithoutBlocks)) !== null) {
+      addKeyPoint(inlineMatch[2], inlineMatch[1]);
+    }
+
+    const legacyMarkerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = legacyMarkerPattern.exec(textWithoutBlocks)) !== null) {
+      const marker = match[0];
+      const markerId = marker.match(/data-flashcards-llm-key=["']([^"']+)["']/i)?.[1] ?? "";
+      addKeyPoint(markerId, match[1]);
     }
 
     return keyPoints;

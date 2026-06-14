@@ -31,10 +31,10 @@ var import_obsidian3 = require("obsidian");
 
 // src/flashcards.ts
 function normalizeSourceText(text) {
-  return text.replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "").replace(/<\/u>/gi, "").replace(/<!--.*?-->/gs, "").replace(/\s+/g, " ").trim();
+  return text.replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "").replace(/<\/u>/gi, "").replace(/^\s*%%\s*flashcards-llm-key-point:(?:start\s+id=[^\s%]+|end)\s*%%\s*$/gim, "").replace(/%%\s*flashcards-llm-key-point:id=[^\s%]+\s*%%/gi, "").replace(/==([\s\S]*?)==/g, "$1").replace(/<!--.*?-->/gs, "").replace(/\s+/g, " ").trim();
 }
 function cleanSourceTextForCard(text) {
-  return text.replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "").replace(/<\/u>/gi, "").replace(/<!--.*?-->/gs, "").replace(/\n{3,}/g, "\n\n").trim();
+  return text.replace(/<u\b[^>]*data-flashcards-llm-key=["'][^"']+["'][^>]*>/gi, "").replace(/<\/u>/gi, "").replace(/^\s*%%\s*flashcards-llm-key-point:(?:start\s+id=[^\s%]+|end)\s*%%\s*$/gim, "").replace(/%%\s*flashcards-llm-key-point:id=[^\s%]+\s*%%/gi, "").replace(/==([\s\S]*?)==/g, "$1").replace(/<!--.*?-->/gs, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 function buildSourceHash(text) {
   const normalized = normalizeSourceText(text);
@@ -758,6 +758,8 @@ var FlashcardsSettingsTab = class extends import_obsidian2.PluginSettingTab {
 };
 
 // src/main.ts
+var KEY_POINT_INLINE_MARKER_PATTERN = /%%\s*flashcards-llm-key-point:id=([^\s%]+)\s*%%/i;
+var KEY_POINT_BLOCK_START_PATTERN = /^\s*%%\s*flashcards-llm-key-point:start\s+id=([^\s%]+)\s*%%\s*$/i;
 var DEFAULT_SETTINGS = {
   apiKey: "",
   baseUrl: "https://api.openai.com",
@@ -804,8 +806,16 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
     this.addCommand({
       id: "mark-selection-as-key-point",
       name: "\u628A\u9009\u4E2D\u6587\u672C\u5212\u4E3A\u91CD\u70B9",
+      hotkeys: [{ modifiers: ["Mod", "Alt"], key: "H" }],
       editorCallback: (editor) => {
         this.markSelectionAsKeyPoint(editor);
+      }
+    });
+    this.addCommand({
+      id: "migrate-legacy-key-point-markers",
+      name: "\u4FEE\u590D\u65E7\u7248\u91CD\u70B9\u6807\u8BB0\u4E3A\u5B89\u5168\u683C\u5F0F",
+      editorCallback: (editor) => {
+        this.migrateLegacyKeyPointMarkers(editor);
       }
     });
     this.addCommand({
@@ -935,6 +945,61 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
       await this.generateAndPreview(editor, view, configuration, selectedMode, sourceText);
     }, mode).open();
   }
+  buildInlineKeyPointMarker(markerId) {
+    return `%% flashcards-llm-key-point:id=${markerId} %%`;
+  }
+  buildBlockKeyPointStartMarker(markerId) {
+    return `%% flashcards-llm-key-point:start id=${markerId} %%`;
+  }
+  buildBlockKeyPointEndMarker() {
+    return "%% flashcards-llm-key-point:end %%";
+  }
+  buildSafeKeyPointMarkup(body, markerId) {
+    const highlightedBody = this.highlightKeyPointMarkdown(body);
+    if (body.includes("\n")) {
+      return [
+        this.buildBlockKeyPointStartMarker(markerId),
+        highlightedBody,
+        this.buildBlockKeyPointEndMarker()
+      ].join("\n");
+    }
+    return `${highlightedBody} ${this.buildInlineKeyPointMarker(markerId)}`;
+  }
+  highlightKeyPointMarkdown(text) {
+    const lines = text.split("\n");
+    let inFence = false;
+    return lines.map((line) => {
+      const trimmed = line.trim();
+      if (/^(```|~~~)/.test(trimmed)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence || !trimmed || line.includes("==")) {
+        return line;
+      }
+      return this.highlightKeyPointLine(line);
+    }).join("\n");
+  }
+  highlightKeyPointLine(line) {
+    var _a, _b, _c, _d, _e, _f;
+    const structuralMatch = line.match(
+      /^(\s*(?:(?:>\s*)+)?(?:(?:#{1,6}\s+)|(?:(?:[-+*]|\d+[.)])\s+(?:\[[ xX-]\]\s+)?))?)(.*?)(\s*)$/
+    );
+    if (!structuralMatch) {
+      return `==${line}==`;
+    }
+    const prefix = (_a = structuralMatch[1]) != null ? _a : "";
+    const content = (_b = structuralMatch[2]) != null ? _b : "";
+    const trailing = (_c = structuralMatch[3]) != null ? _c : "";
+    if (!content.trim()) {
+      return line;
+    }
+    const contentMatch = content.match(/^(\s*)(.*?)(\s*)$/);
+    const contentLeading = (_d = contentMatch == null ? void 0 : contentMatch[1]) != null ? _d : "";
+    const contentBody = (_e = contentMatch == null ? void 0 : contentMatch[2]) != null ? _e : content;
+    const contentTrailing = (_f = contentMatch == null ? void 0 : contentMatch[3]) != null ? _f : "";
+    return `${prefix}${contentLeading}==${contentBody}==${contentTrailing}${trailing}`;
+  }
   markSelectionAsKeyPoint(editor) {
     var _a, _b, _c;
     const selection = editor.getSelection();
@@ -950,19 +1015,37 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
       new import_obsidian3.Notice("\u8BF7\u5148\u9009\u4E2D\u9700\u8981\u5212\u91CD\u70B9\u7684\u6587\u672C");
       return;
     }
-    if (/data-flashcards-llm-key=["']/.test(body)) {
+    if (/data-flashcards-llm-key=["']/.test(body) || KEY_POINT_INLINE_MARKER_PATTERN.test(body) || body.split("\n").some((line) => KEY_POINT_BLOCK_START_PATTERN.test(line.trim()))) {
       new import_obsidian3.Notice("\u8FD9\u6BB5\u5185\u5BB9\u5DF2\u7ECF\u662F\u91CD\u70B9");
       return;
     }
-    if (/<\/u>/i.test(body)) {
-      new import_obsidian3.Notice("\u9009\u533A\u5305\u542B\u5DF2\u6709\u4E0B\u5212\u7EBF\u6807\u8BB0\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u672A\u88AB\u5305\u88F9\u7684\u539F\u6587");
+    const sourceHash = buildSourceHash(body);
+    editor.replaceSelection(`${leading}${this.buildSafeKeyPointMarkup(body, sourceHash)}${trailing}`);
+    new import_obsidian3.Notice("\u5DF2\u5212\u91CD\u70B9\uFF0C\u53EF\u4F7F\u7528\u6279\u91CF\u547D\u4EE4\u751F\u6210\u5361\u7247");
+  }
+  migrateLegacyKeyPointMarkers(editor) {
+    const text = editor.getValue();
+    const legacyMarkerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
+    let migratedCount = 0;
+    const migrated = text.replace(legacyMarkerPattern, (fullMatch, rawBody) => {
+      var _a, _b, _c, _d, _e;
+      const markerId = (_b = (_a = fullMatch.match(/data-flashcards-llm-key=["']([^"']+)["']/i)) == null ? void 0 : _a[1]) != null ? _b : buildSourceHash(rawBody);
+      const match = rawBody.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      const leading = (_c = match == null ? void 0 : match[1]) != null ? _c : "";
+      const body = (_d = match == null ? void 0 : match[2]) != null ? _d : rawBody;
+      const trailing = (_e = match == null ? void 0 : match[3]) != null ? _e : "";
+      if (!body.trim()) {
+        return rawBody;
+      }
+      migratedCount += 1;
+      return `${leading}${this.buildSafeKeyPointMarkup(body, markerId)}${trailing}`;
+    });
+    if (!migratedCount) {
+      new import_obsidian3.Notice("\u6CA1\u6709\u627E\u5230\u9700\u8981\u4FEE\u590D\u7684\u65E7\u7248\u91CD\u70B9\u6807\u8BB0");
       return;
     }
-    const sourceHash = buildSourceHash(body);
-    editor.replaceSelection(
-      `${leading}<u class="flashcards-llm-key-point" data-flashcards-llm-key="${sourceHash}">${body}</u>${trailing}`
-    );
-    new import_obsidian3.Notice("\u5DF2\u5212\u91CD\u70B9\uFF0C\u53EF\u4F7F\u7528\u6279\u91CF\u547D\u4EE4\u751F\u6210\u5361\u7247");
+    editor.setValue(migrated);
+    new import_obsidian3.Notice(`\u5DF2\u4FEE\u590D ${migratedCount} \u4E2A\u65E7\u7248\u91CD\u70B9\u6807\u8BB0`);
   }
   getEffectiveConfig(configuration) {
     if (!configuration.apiKey) {
@@ -990,15 +1073,11 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
   extractMarkedKeyPoints(text) {
     var _a, _b;
     const keyPoints = [];
-    const markerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
-    let match;
     let index = 0;
-    while ((match = markerPattern.exec(text)) !== null) {
-      const marker = match[0];
-      const markerId = (_b = (_a = marker.match(/data-flashcards-llm-key=["']([^"']+)["']/i)) == null ? void 0 : _a[1]) != null ? _b : "";
-      const cleanedText = cleanSourceTextForCard(match[1]);
+    const addKeyPoint = (markerId, rawText) => {
+      const cleanedText = cleanSourceTextForCard(rawText);
       if (!cleanedText) {
-        continue;
+        return;
       }
       keyPoints.push({
         markerId,
@@ -1007,6 +1086,23 @@ var FlashcardsLLMPlugin = class extends import_obsidian3.Plugin {
         index
       });
       index += 1;
+    };
+    const blockPattern = /^\s*%%\s*flashcards-llm-key-point:start\s+id=([^\s%]+)\s*%%\s*$(\r?\n)([\s\S]*?)\2\s*%%\s*flashcards-llm-key-point:end\s*%%\s*$/gim;
+    const textWithoutBlocks = text.replace(blockPattern, (_full, markerId, _newline, body) => {
+      addKeyPoint(markerId, body);
+      return "\n";
+    });
+    const inlinePattern = /==([^\n]*?)==\s*%%\s*flashcards-llm-key-point:id=([^\s%]+)\s*%%/gi;
+    let inlineMatch;
+    while ((inlineMatch = inlinePattern.exec(textWithoutBlocks)) !== null) {
+      addKeyPoint(inlineMatch[2], inlineMatch[1]);
+    }
+    const legacyMarkerPattern = /<u\b(?=[^>]*data-flashcards-llm-key=["'][^"']+["'])[^>]*>([\s\S]*?)<\/u>/gi;
+    let match;
+    while ((match = legacyMarkerPattern.exec(textWithoutBlocks)) !== null) {
+      const marker = match[0];
+      const markerId = (_b = (_a = marker.match(/data-flashcards-llm-key=["']([^"']+)["']/i)) == null ? void 0 : _a[1]) != null ? _b : "";
+      addKeyPoint(markerId, match[1]);
     }
     return keyPoints;
   }
