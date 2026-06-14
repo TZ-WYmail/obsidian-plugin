@@ -1,0 +1,36 @@
+.flashcards-llm-preview-modal {
+  min-width: 720px;
+}
+
+.flashcards-llm-preview-textarea {
+  width: 100%;
+  min-height: 420px;
+  resize: vertical;
+  font-family: var(--font-monospace);
+}
+
+.flashcards-llm-floating-bar {
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.flashcards-llm-floating-bar button {
+  border: 1px solid var(--background-modifier-border);
+  background: var(--interactive-normal);
+  color: var(--text-normal);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.flashcards-llm-floating-bar button:hover {
+  background: var(--interactive-hover);
+}
