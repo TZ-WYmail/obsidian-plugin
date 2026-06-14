@@ -1,10 +1,30 @@
+.flashcards-llm-resizable-modal {
+  width: min(900px, 90vw);
+  height: min(760px, 85vh);
+  min-width: min(420px, 92vw);
+  min-height: 320px;
+  max-width: 96vw;
+  max-height: 94vh;
+  resize: both;
+  overflow: auto;
+}
+
+.flashcards-llm-resizable-modal .modal-content {
+  height: 100%;
+  box-sizing: border-box;
+}
+
 .flashcards-llm-preview-modal {
-  min-width: 720px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .flashcards-llm-preview-textarea {
   width: 100%;
-  min-height: 420px;
+  flex: 1 1 220px;
+  min-height: 180px;
   resize: vertical;
   font-family: var(--font-monospace);
 }
@@ -56,7 +76,9 @@
 }
 
 .flashcards-llm-review-modal {
-  min-width: min(760px, 90vw);
+  min-width: 0;
+  max-height: 100%;
+  overflow: auto;
 }
 
 .flashcards-llm-review-status {

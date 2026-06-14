@@ -155,6 +155,8 @@ export class PreviewModal extends Modal {
 
   onOpen() {
     const { contentEl } = this;
+    this.modalEl.addClass("flashcards-llm-resizable-modal");
+    this.modalEl.addClass("flashcards-llm-preview-modal-shell");
     contentEl.empty();
     contentEl.addClass("flashcards-llm-preview-modal");
     contentEl.createEl("h2", { text: "预览并编辑卡片" });
@@ -199,6 +201,8 @@ export class PreviewModal extends Modal {
     if (this.generating && !this.submitStarted) {
       this.onCancel?.();
     }
+    this.modalEl.removeClass("flashcards-llm-resizable-modal");
+    this.modalEl.removeClass("flashcards-llm-preview-modal-shell");
     this.contentEl.empty();
   }
 
@@ -276,10 +280,14 @@ export class AnkiReviewModal extends Modal {
   }
 
   onOpen() {
+    this.modalEl.addClass("flashcards-llm-resizable-modal");
+    this.modalEl.addClass("flashcards-llm-review-modal-shell");
     this.render();
   }
 
   onClose() {
+    this.modalEl.removeClass("flashcards-llm-resizable-modal");
+    this.modalEl.removeClass("flashcards-llm-review-modal-shell");
     this.contentEl.empty();
   }
 
